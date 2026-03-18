@@ -1,29 +1,21 @@
 {
     "name": "useburrow/craft-burrow",
-    "description": "Burrow bridge plugin for Craft CMS with onboarding, integrations, and system sync.",
-    "version": "5.0.0",
+    "description": "Connect your Craft site to Burrow — the orchestration layer for agency operations. Event tracking, system snapshots, and operational visibility for Freeform, Formie, and Commerce.",
     "type": "craft-plugin",
-    "keywords": ["craft", "cms", "craftcms", "craft-plugin", "burrow", "integration", "freeform", "formie", "commerce"],
+    "keywords": ["craft", "craftcms", "craft-plugin", "burrow", "agency", "operations", "orchestration", "event-tracking", "freeform", "formie", "craft-commerce", "ecommerce", "analytics", "reporting", "monitoring", "dashboard", "visibility", "integration", "sync", "backfill", "observability", "multi-tenant"],
     "license": "proprietary",
     "authors": [
         {
-            "name": "useburrow",
+            "name": "Burrow Analytics, LLC",
             "homepage": "https://useburrow.com"
         }
     ],
     "support": {
-        "email": "contact@amiciinfotech.com",
-            "source": "https://github.com/useburrow/craft-burrow"
+        "email": "support@useburrow.com",
+        "issues": "https://github.com/useburrow/craft-burrow/issues",
+        "source": "https://github.com/useburrow/craft-burrow",
+        "docs": "https://github.com/useburrow/craft-burrow/blob/main/README.md"
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../../burrow-sdk/php",
-            "options": {
-                "symlink": false
-            }
-        }
-    ],
     "require": {
         "php": "^8.2",
         "craftcms/cms": "^5.0",
@@ -31,15 +23,16 @@
     },
     "autoload": {
         "psr-4": {
-            "amici\\Burrow\\": "src/"
+            "burrow\\Burrow\\": "src/"
         }
     },
     "extra": {
         "handle": "burrow",
         "name": "Burrow",
-        "description": "Burrow bridge plugin for Craft CMS with onboarding, integrations, and system sync.",
-        "developer": "useburrow",
+        "description": "Connect your Craft site to Burrow — the orchestration layer for agency operations. Event tracking, system snapshots, and operational visibility for Freeform, Formie, and Commerce.",
+        "documentationUrl": "https://github.com/useburrow/craft-burrow/blob/main/README.md",
+        "developer": "Burrow Analytics, LLC",
         "developerUrl": "https://useburrow.com",
-        "class": "amici\\Burrow\\Plugin"
+        "class": "burrow\\Burrow\\Plugin"
     }
 }

@@ -1,0 +1,609 @@
+{% extends "_layouts/cp" %}
+{% import "_includes/forms" as forms %}
+
+{% set title = "Burrow Setup"|t('burrow') %}
+{% set selectedSubnavItem = 'settings' %}
+{% set fullPageForm = false %}
+
+{% set stepTitles = {
+    connection: 'Establish connection',
+    project: 'Choose client (Project)',
+    integrations: 'Integrations',
+    freeform: 'Freeform setup',
+    formie: 'Formie setup',
+    commerce: 'Craft Commerce setup',
+    review: 'Review',
+    finish: 'Finish'
+} %}
+
+{% block sidebar %}
+    <nav>
+        <ul>
+            {% for wizardStep, wizardLabel in wizardSteps %}
+                {% set isFutureStep = loop.index0 > currentStepIndex %}
+                <li data-step="{{ wizardStep }}" class="{{ isFutureStep ? 'disabled' : '' }}">
+                    {% if isFutureStep %}
+                        <span class="disabled-link">
+                            <span class="burrow-step-num">{{ loop.index }}.</span>{{ wizardLabel }}
+                        </span>
+                    {% else %}
+                        <a href="{{ cpUrl('burrow/settings', { step: wizardStep }) }}" class="{{ wizardStep == step ? 'sel' : '' }}">
+                            <span class="burrow-step-num">{{ loop.index }}.</span>{{ wizardLabel }}
+                        </a>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </nav>
+{% endblock %}
+
+{% block content %}
+    <style>
+        .burrow-step-num { color: #8f98a3; margin-right: 6px; }
+        .burrow-card { padding: 20px; border: 1px solid #e3e5e8; border-radius: 6px; background: #fff; }
+        .burrow-grid { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 16px; }
+        .burrow-muted { color: #667085; }
+        .burrow-form-list { max-height: 260px; overflow: auto; border: 1px solid #e3e5e8; border-radius: 4px; padding: 8px 12px; }
+        .burrow-form-list label { display: block; margin: 6px 0; }
+        #sidebar nav ul li.disabled .disabled-link { display: block; padding: 7px 14px; color: #a4acb6; cursor: not-allowed; }
+        .burrow-freeform-form-block { margin: 0 0 24px 0; padding-top: 8px; border-top: 1px solid #e5e8ec; }
+        .burrow-freeform-form-block:first-of-type { border-top: 0; padding-top: 0; }
+        .burrow-freeform-form-block h3 { font-size: 18px; line-height: 1.3; margin: 0 0 10px 0; font-weight: 700; }
+        .burrow-field-mapping-table-wrap { margin-top: 8px; }
+        .burrow-field-mapping-table-wrap tr.is-disabled td { opacity: 0.5; }
+        .burrow-review-table { margin-top: 8px; }
+        .burrow-review-actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+        .burrow-setup-icon { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; margin-bottom: 4px; }
+        .burrow-setup-icon .burrow-icon-dot { width: 16px; height: 16px; border-radius: 50%; background: #0d66d0; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+        .burrow-setup-icon .burrow-menu-glyph { width: 16px; height: 16px; object-fit: contain; }
+    </style>
+
+    <div class="burrow-card">
+        {% if not sdkAvailable %}
+            <p class="warning with-icon">
+                Burrow PHP SDK is not available. Install `useburrow/sdk-php` before onboarding.
+            </p>
+        {% endif %}
+
+        <h2>{{ stepTitles[step] ?? 'Setup' }}</h2>
+
+        {% if step == 'connection' %}
+            <p class="burrow-muted">Connect this Craft site to Burrow and discover available projects.</p>
+
+            <form method="post" action="{{ actionUrl('burrow/settings/save-connection') }}">
+                {{ csrfInput() }}
+                {{ forms.textField({
+                    label: 'Base URL',
+                    name: 'baseUrl',
+                    value: settings.baseUrl,
+                    required: true
+                }) }}
+                {{ forms.passwordField({
+                    label: 'API Key',
+                    name: 'apiKey',
+                    value: settings.apiKey,
+                    required: true
+                }) }}
+                <button class="btn submit">Connect & Discover</button>
+            </form>
+
+        {% elseif step == 'project' %}
+            <p class="burrow-muted">Select the Burrow project this Craft site should sync with.</p>
+
+            {% if projects is empty %}
+                <p>No discovered projects yet. Run Step 1 first.</p>
+            {% else %}
+                <form method="post" action="{{ actionUrl('burrow/settings/select-project') }}">
+                    {{ csrfInput() }}
+                    <table class="data fullwidth">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>Project</th>
+                                <th>Organization</th>
+                                <th>Client</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for project in projects %}
+                                <tr>
+                                    <td><input type="radio" name="projectSelection" value="{{ project|json_encode|e('html_attr') }}" required></td>
+                                    <td>{{ project.projectName ?: project.projectId }}</td>
+                                    <td>{{ project.organizationId }}</td>
+                                    <td>{{ project.clientId }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 15px;">
+                        <button class="btn submit">Link Project</button>
+                    </div>
+                </form>
+            {% endif %}
+
+        {% elseif step == 'integrations' %}
+            <p class="burrow-muted">Select integration providers to bridge into Burrow.</p>
+
+            <form method="post" action="{{ actionUrl('burrow/settings/save-integrations') }}">
+                {{ csrfInput() }}
+                {% for key, integration in availableIntegrations %}
+                    <div style="margin: 10px 0;">
+                        <label>
+                            <input
+                                class="burrow-integration-checkbox"
+                                type="checkbox"
+                                name="integrations[]"
+                                value="{{ key }}"
+                                {{ key in state.selectedIntegrations ? 'checked' : '' }}
+                                {{ not integration.installed ? 'disabled' : '' }}
+                            >
+                            <strong>{{ integration.label }}</strong>
+                            {% if integration.installed %}
+                                <span class="burrow-muted">Installed (v{{ integration.version }})</span>
+                            {% else %}
+                                <span class="burrow-muted">Not installed</span>
+                            {% endif %}
+                        </label>
+                    </div>
+                {% endfor %}
+                <div style="margin-top: 15px;">
+                    <button id="burrow-save-integrations" class="btn submit">Save Integrations</button>
+                </div>
+            </form>
+            <script>
+                (() => {
+                    const boxes = Array.from(document.querySelectorAll('.burrow-integration-checkbox'));
+                    const submit = document.getElementById('burrow-save-integrations');
+                    if (!boxes.length || !submit) {
+                        return;
+                    }
+                    const sync = () => {
+                        submit.disabled = boxes.filter((box) => box.checked).length === 0;
+                    };
+                    boxes.forEach((box) => box.addEventListener('change', sync));
+                    sync();
+                })();
+            </script>
+
+        {% elseif step == 'freeform' %}
+            {% set freeformConfig = integrationStepData.settings.freeform ?? {} %}
+            {% set freeformSavedForms = freeformConfig.forms ?? {} %}
+            <p class="burrow-muted">
+                Target guide: properties are event details (context), while tags are report-friendly dimensions used for filtering, grouping, or charting.
+            </p>
+            <p class="burrow-muted">
+                Tip: use Count-only tracking to send minimal events with formId, formName, submissionId, and timestamp even when no additional fields are selected.
+            </p>
+            <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
+                {{ csrfInput() }}
+                <input type="hidden" name="integration" value="freeform">
+                {% if integrationStepData.freeformForms is empty %}
+                    <p class="burrow-muted">No Freeform forms were found.</p>
+                {% else %}
+                    {% for form in integrationStepData.freeformForms %}
+                        {% set formConfig = freeformSavedForms[form.id] ?? {} %}
+                        {% set formMode = formConfig.mode ?? 'off' %}
+                        {% set isCustomMode = formMode == 'custom_fields' %}
+                        {% set formFields = integrationStepData.freeformFieldsByFormId[form.id] ?? [] %}
+                        {% set mappedFields = formConfig.fields ?? {} %}
+                        <div class="burrow-freeform-form-block" data-form-id="{{ form.id }}">
+                            <h3>{{ form.name }}</h3>
+                            <fieldset style="margin:0 0 10px 0;">
+                                <legend><strong>Tracking mode</strong></legend>
+                                <span style="margin-right:14px;">{{ forms.radio({
+                                    class: 'burrow-form-mode-radio',
+                                    name: 'freeform[forms][' ~ form.id ~ '][mode]',
+                                    value: 'off',
+                                    checked: formMode == 'off',
+                                    label: 'Off'
+                                }) }}</span>
+                                <span style="margin-right:14px;">{{ forms.radio({
+                                    class: 'burrow-form-mode-radio',
+                                    name: 'freeform[forms][' ~ form.id ~ '][mode]',
+                                    value: 'count_only',
+                                    checked: formMode == 'count_only',
+                                    label: 'Count-only'
+                                }) }}</span>
+                                <span>{{ forms.radio({
+                                    class: 'burrow-form-mode-radio',
+                                    name: 'freeform[forms][' ~ form.id ~ '][mode]',
+                                    value: 'custom_fields',
+                                    checked: formMode == 'custom_fields',
+                                    label: 'Custom fields'
+                                }) }}</span>
+                            </fieldset>
+                            <input type="hidden" name="freeform[forms][{{ form.id }}][externalFormId]" value="{{ form.id }}">
+                            <input type="hidden" name="freeform[forms][{{ form.id }}][formName]" value="{{ form.name }}">
+                            {% if formFields is empty %}
+                                <p class="burrow-muted">No fields detected for this form.</p>
+                            {% else %}
+                                <div class="burrow-field-mapping-table-wrap">
+                                    <table class="data fullwidth">
+                                        <thead>
+                                            <tr>
+                                                <th>Include</th>
+                                                <th>Field</th>
+                                                <th>Type</th>
+                                                <th>Canonical Key</th>
+                                                <th>Target</th>
+                                                <th>Display Label</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for field in formFields %}
+                                                {% set fieldConfig = mappedFields[field.externalFieldId] ?? {} %}
+                                                {% set isIncluded = fieldConfig ? true : false %}
+                                                {% set canonicalKey = fieldConfig.canonicalKey ?? field.canonicalKey %}
+                                                {% set target = fieldConfig.target ?? '' %}
+                                                {% set displayLabel = fieldConfig.displayLabelOverride ?? field.sourceLabel %}
+                                                <tr class="{{ isCustomMode ? '' : 'is-disabled' }}">
+                                                    <td>
+                                                        {{ forms.checkbox({
+                                                            id: 'freeform-' ~ form.id ~ '-field-' ~ field.externalFieldId ~ '-include',
+                                                            class: 'burrow-form-field-checkbox',
+                                                            name: 'freeform[forms][' ~ form.id ~ '][fields][' ~ field.externalFieldId ~ '][include]',
+                                                            value: 1,
+                                                            checked: isIncluded,
+                                                            disabled: (not isCustomMode),
+                                                            label: ' '
+                                                        }) }}
+                                                    </td>
+                                                    <td>{{ field.sourceLabel }}</td>
+                                                    <td>{{ field.dataType }}</td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][canonicalKey]" value="{{ canonicalKey }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="select">
+                                                            <select name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][target]" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                                <option value="">Select one</option>
+                                                                <option value="properties" {{ target == 'properties' ? 'selected' : '' }}>properties</option>
+                                                                <option value="tags" {{ target == 'tags' ? 'selected' : '' }}>tags</option>
+                                                            </select>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][displayLabelOverride]" value="{{ displayLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                <input type="hidden" name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][externalFieldId]" value="{{ field.externalFieldId }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][sourceLabel]" value="{{ field.sourceLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="freeform[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][dataType]" value="{{ field.dataType }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    <script>
+                        (() => {
+                            const forms = Array.from(document.querySelectorAll('.burrow-freeform-form-block'));
+                            if (!forms.length) return;
+                            const parentForm = forms[0].closest('form');
+                            forms.forEach((block) => {
+                                const modeInputs = Array.from(block.querySelectorAll('.burrow-form-mode-radio'));
+                                const fields = Array.from(block.querySelectorAll('.burrow-form-field-checkbox'));
+                                if (!modeInputs.length) return;
+                                const controls = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap input, .burrow-field-mapping-table-wrap select, .burrow-field-mapping-table-wrap textarea'));
+                                const currentMode = () => {
+                                    const picked = modeInputs.find((input) => input.checked);
+                                    return picked ? picked.value : 'off';
+                                };
+                                const sync = () => {
+                                    const mode = currentMode();
+                                    const fieldsEnabled = mode === 'custom_fields';
+                                    if (!fieldsEnabled) {
+                                        fields.forEach((field) => { field.checked = false; });
+                                    }
+                                    const rows = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap tbody tr'));
+                                    rows.forEach((row) => row.classList.toggle('is-disabled', !fieldsEnabled));
+                                    controls.forEach((control) => {
+                                        if (!fieldsEnabled) {
+                                            control.setAttribute('disabled', 'disabled');
+                                        } else {
+                                            control.removeAttribute('disabled');
+                                        }
+                                    });
+                                    block.classList.toggle('burrow-count-only-active', mode === 'count_only');
+                                };
+                                modeInputs.forEach((input) => input.addEventListener('change', sync));
+                                fields.forEach((field) => field.addEventListener('change', sync));
+                                sync();
+                            });
+                            if (!parentForm) return;
+                            parentForm.addEventListener('submit', (event) => {
+                                for (const block of forms) {
+                                    const selectedMode = block.querySelector('.burrow-form-mode-radio:checked');
+                                    const mode = selectedMode ? selectedMode.value : 'off';
+                                    if (mode !== 'custom_fields') {
+                                        continue;
+                                    }
+                                    const heading = block.querySelector('h3');
+                                    const formName = heading && heading.textContent ? heading.textContent.trim() : 'This form';
+                                    const includedFields = Array.from(block.querySelectorAll('.burrow-form-field-checkbox:checked'));
+                                    if (!includedFields.length) {
+                                        event.preventDefault();
+                                        window.alert(formName + ': please include at least one field when using Custom fields mode.');
+                                        return;
+                                    }
+                                    for (const checkbox of includedFields) {
+                                        const row = checkbox.closest('tr');
+                                        const targetSelect = row ? row.querySelector('select[name*="[target]"]') : null;
+                                        if (targetSelect && !targetSelect.value) {
+                                            event.preventDefault();
+                                            window.alert(formName + ': please choose a target for each included field.');
+                                            targetSelect.focus();
+                                            return;
+                                        }
+                                    }
+                                }
+                            });
+                        })();
+                    </script>
+                {% endif %}
+                <div style="margin-top: 16px;">
+                    <button class="btn submit">Continue to {{ stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step') }}</button>
+                </div>
+            </form>
+
+        {% elseif step == 'formie' %}
+            {% set formieConfig = integrationStepData.settings.formie ?? {} %}
+            <p class="burrow-muted">Select Formie forms and tracking mode for Burrow contracts.</p>
+            <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
+                {{ csrfInput() }}
+                <input type="hidden" name="integration" value="formie">
+                <fieldset>
+                    <legend><strong>Tracking mode</strong></legend>
+                    {{ forms.radio({
+                        name: 'formieMode',
+                        value: 'off',
+                        checked: (formieConfig.mode ?? 'count_only') == 'off',
+                        label: 'Off'
+                    }) }}<br>
+                    {{ forms.radio({
+                        name: 'formieMode',
+                        value: 'count_only',
+                        checked: (formieConfig.mode ?? 'count_only') == 'count_only',
+                        label: 'Count-only'
+                    }) }}<br>
+                    {{ forms.radio({
+                        name: 'formieMode',
+                        value: 'custom_fields',
+                        checked: (formieConfig.mode ?? 'count_only') == 'custom_fields',
+                        label: 'Custom fields (field mapping next pass)'
+                    }) }}
+                </fieldset>
+                <div style="margin-top: 14px;">
+                    <strong>Forms</strong>
+                    {% if integrationStepData.formieForms is empty %}
+                        <p class="burrow-muted">No Formie forms were found.</p>
+                    {% else %}
+                        <div class="burrow-form-list">
+                            {% for form in integrationStepData.formieForms %}
+                                <label>
+                                    <input type="checkbox" name="formieFormIds[]" value="{{ form.id }}" {{ form.id in (formieConfig.formIds ?? []) ? 'checked' : '' }}>
+                                    {{ form.name }} <span class="burrow-muted">({{ form.handle ?: form.id }})</span>
+                                </label>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                <div style="margin-top: 16px;">
+                    <button class="btn submit">Continue to {{ stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step') }}</button>
+                </div>
+            </form>
+
+        {% elseif step == 'commerce' %}
+            {% set commerceConfig = integrationStepData.settings.commerce ?? {} %}
+            <p class="burrow-muted">Choose how Craft Commerce events should be tracked.</p>
+            <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
+                {{ csrfInput() }}
+                <input type="hidden" name="integration" value="commerce">
+                <fieldset>
+                    <legend><strong>Commerce tracking</strong></legend>
+                    {{ forms.radio({
+                        name: 'commerceMode',
+                        value: 'track',
+                        checked: (commerceConfig.mode ?? 'track') == 'track',
+                        label: 'Track events'
+                    }) }}<br>
+                    {{ forms.radio({
+                        name: 'commerceMode',
+                        value: 'off',
+                        checked: (commerceConfig.mode ?? 'track') == 'off',
+                        label: 'Do not track events'
+                    }) }}
+                </fieldset>
+                <div style="margin-top: 10px;">
+                    <label>
+                        <input type="checkbox" name="ecommerceFunnel" value="1" {{ (commerceConfig.ecommerceFunnel ?? false) ? 'checked' : '' }}>
+                        Enable cart and checkout funnel tracking
+                    </label>
+                </div>
+                <div style="margin-top: 16px;">
+                    <button class="btn submit">Continue to {{ stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step') }}</button>
+                </div>
+            </form>
+
+        {% elseif step == 'review' %}
+            <p>Review exactly what will be sent to Burrow when contracts are synced.</p>
+            <p class="burrow-muted">
+                Icons are resolved automatically from Burrow defaults. If needed later, icon overrides use Lucide icon key names (for example <code>file-signature</code>, <code>shopping-cart</code>, <code>layers</code>). See <a href="https://lucide.dev/icons" target="_blank" rel="noopener noreferrer">lucide.dev/icons</a>.
+            </p>
+
+            <h3>Integration Readiness</h3>
+            <table class="data fullwidth burrow-review-table">
+                <thead>
+                <tr>
+                    <th>Integration</th>
+                    <th>Status</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% if integrationReadinessRows is empty %}
+                    <tr><td colspan="2">No integrations selected.</td></tr>
+                {% else %}
+                    {% for row in integrationReadinessRows %}
+                        <tr>
+                            <td>{{ row.name }}</td>
+                            <td>{{ row.status }}</td>
+                        </tr>
+                    {% endfor %}
+                {% endif %}
+                </tbody>
+            </table>
+
+            <h3 style="margin-top:16px;">Contracts To Sync</h3>
+            <table class="data fullwidth burrow-review-table">
+                <thead>
+                <tr>
+                    <th>Provider</th>
+                    <th>Form</th>
+                    <th>Form ID</th>
+                    <th>Mode</th>
+                    <th>Mapped fields</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% if contractRows is empty %}
+                    <tr><td colspan="5">No enabled contracts yet. Return to provider setup and enable at least one form.</td></tr>
+                {% else %}
+                    {% for row in contractRows %}
+                        <tr>
+                            <td>{{ row.provider }}</td>
+                            <td>{{ row.formName ?: '-' }}</td>
+                            <td>{{ row.externalFormId ?: '-' }}</td>
+                            <td>{{ row.mode }}</td>
+                            <td>{{ row.mappingCount }}</td>
+                        </tr>
+                    {% endfor %}
+                {% endif %}
+                </tbody>
+            </table>
+
+            <div class="burrow-review-actions">
+                <form method="post" action="{{ actionUrl('burrow/settings/sync-contracts') }}">
+                    {{ csrfInput() }}
+                    <button class="btn submit">Sync Contracts to Burrow</button>
+                </form>
+                {% if contractSyncMeta.syncedAt is defined and contractSyncMeta.syncedAt %}
+                    <span class="burrow-muted">
+                        Last sync: {{ contractSyncMeta.syncedAt }}
+                        {% if contractSyncMeta.version is defined and contractSyncMeta.version %}
+                            (version: {{ contractSyncMeta.version }})
+                        {% endif %}
+                    </span>
+                {% endif %}
+            </div>
+
+        {% elseif step == 'finish' %}
+            <table class="data fullwidth" style="max-width:960px;">
+                <tbody>
+                <tr>
+                    <th>Connected Project</th>
+                    <td>
+                        <code>{{ state.projectId ?: '-' }}</code>
+                        {% if projectUrl %}
+                            &nbsp;<a href="{{ projectUrl }}" target="_blank" rel="noopener noreferrer">View in Burrow &#8594;</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>Base URL</th>
+                    <td><code>{{ settings.baseUrl }}</code></td>
+                </tr>
+                <tr>
+                    <th>Integrations</th>
+                    <td>
+                        {% if integrationSummaryRows is empty %}
+                            <span class="burrow-muted">None selected</span>
+                        {% else %}
+                            {% for row in integrationSummaryRows %}
+                                <span class="burrow-setup-icon">
+                                    {% if row.iconDataUri %}
+                                        <img class="burrow-menu-glyph" src="{{ row.iconDataUri }}" alt="" aria-hidden="true">
+                                    {% else %}
+                                        <span class="burrow-icon-dot">{{ (row.label|slice(0, 1))|upper }}</span>
+                                    {% endif %}
+                                    <strong>{{ row.label }}</strong>
+                                    {% if row.detail %}
+                                        <span class="burrow-muted">{{ row.detail }}</span>
+                                    {% endif %}
+                                </span>
+                            {% endfor %}
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>Contracts Synced</th>
+                    <td>{{ contractSyncMeta.syncedAt ?? 'Not yet synced' }}</td>
+                </tr>
+                </tbody>
+            </table>
+
+            <h2 style="margin-top:24px;">Active Contracts</h2>
+            <table class="data fullwidth" style="max-width:900px;">
+                <thead>
+                <tr>
+                    <th>Provider</th>
+                    <th>Form</th>
+                    <th>Form ID</th>
+                    <th>Mode</th>
+                    <th>Mapped Fields</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% if contractRows is empty %}
+                    <tr><td colspan="5">No active contracts.</td></tr>
+                {% else %}
+                    {% for row in contractRows %}
+                        <tr>
+                            <td>{{ row.provider }}</td>
+                            <td>{{ row.formName ?: '-' }}</td>
+                            <td>{{ row.externalFormId ?: '-' }}</td>
+                            <td>{{ row.mode }}</td>
+                            <td>{{ row.mappingCount }}</td>
+                        </tr>
+                    {% endfor %}
+                {% endif %}
+                </tbody>
+            </table>
+
+            <h2 style="margin-top:24px;">WooCommerce</h2>
+            {% set commerceConfig = state.integrationSettings.commerce ?? {} %}
+            {% if 'commerce' in state.selectedIntegrations and (commerceConfig.mode ?? 'track') == 'track' %}
+                <p>Tracking <code>ecommerce.order.placed</code> and <code>ecommerce.item.purchased</code> events for all Craft Commerce orders.</p>
+            {% else %}
+                <p class="burrow-muted">Commerce tracking is currently off.</p>
+            {% endif %}
+
+            <h2 style="margin-top:24px;">Data Backfill</h2>
+            {% set backfillMeta = state.integrationSettings.backfill ?? {} %}
+            <p>
+                {% if (backfillMeta.status ?? '') == 'completed' %}
+                    <span class="burrow-muted">Completed: {{ backfillMeta.accepted ?? 0 }} accepted</span>
+                {% elseif (backfillMeta.status ?? '') == 'failed' %}
+                    <span class="burrow-muted">Failed</span>
+                {% else %}
+                    <span class="burrow-muted">Idle</span>
+                {% endif %}
+                <a href="{{ cpUrl('burrow/dashboard') }}">Manage in Dashboard</a>
+            </p>
+            <p style="margin-top:20px;">
+                <a class="btn submit" href="{{ cpUrl('burrow/dashboard') }}">Go to Dashboard</a>
+                <a class="btn" href="{{ cpUrl('burrow/settings', { step: 'connection' }) }}" style="margin-left:6px;">Reconfigure</a>
+            </p>
+
+        {% else %}
+            <p>Burrow bridge is configured.</p>
+            <p><strong>Linked project:</strong> {{ state.projectId ?: 'N/A' }}</p>
+            <p><strong>Selected integrations:</strong> {{ state.selectedIntegrations|join(', ') ?: 'N/A' }}</p>
+            <p><a class="btn" href="{{ cpUrl('burrow/settings', { step: 'review' }) }}">Back to Review</a></p>
+        {% endif %}
+    </div>
+{% endblock %}

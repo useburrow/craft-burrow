@@ -1,0 +1,263 @@
+{% extends "_layouts/cp" %}
+
+{% set title = "Burrow Dashboard"|t('burrow') %}
+{% set selectedSubnavItem = selectedSubnavItem ?? 'dashboard' %}
+
+{% block content %}
+    <style>
+        .burrow-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; margin: 16px 0; }
+        .burrow-card { border:1px solid #e3e5e8; border-radius: 6px; padding: 14px; background:#fff; }
+        .burrow-value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+        .burrow-muted { color: #667085; }
+        .burrow-status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.5;
+            border: 1px solid transparent;
+        }
+        .burrow-status-completed { background: #ecfdf5; color: #047857; border-color: #86efac; }
+        .burrow-status-failed { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
+        .burrow-status-idle { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
+        .burrow-section { margin-top: 24px; }
+        .burrow-integration-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+        .burrow-integration-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; background:#f0f6fc; border:1px solid #c3d0e0; border-radius:4px; font-size:13px; }
+        .burrow-menu-glyph { width:16px; height:16px; object-fit:contain; }
+        .burrow-icon-dot { width: 16px; height: 16px; border-radius: 50%; background: #0d66d0; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+    </style>
+
+    {% set contractSyncMeta = state.integrationSettings.contractSync ?? {} %}
+    {% set backfillStatus = backfillState.status ?? 'idle' %}
+
+    <div class="burrow-grid">
+        <div class="burrow-card">
+            <div class="burrow-muted">Linked Project</div>
+            <div class="burrow-value">{{ state.projectId ?: 'Not linked' }}</div>
+        </div>
+        <div class="burrow-card">
+            <div class="burrow-muted">Integrations</div>
+            <div class="burrow-value">{{ state.selectedIntegrations|length }}</div>
+            <div class="burrow-muted">{{ state.selectedIntegrations|join(', ') ?: 'None selected' }}</div>
+        </div>
+        <div class="burrow-card">
+            <div class="burrow-muted">Outbox Pending</div>
+            <div class="burrow-value">{{ queueStats.pending + queueStats.retrying }}</div>
+            <div class="burrow-muted">Failed: {{ queueStats.failed }} | Sent: {{ queueStats.sent }}</div>
+        </div>
+        <div class="burrow-card">
+            <div class="burrow-muted">Snapshot Updates</div>
+            <div class="burrow-value">{{ snapshot.updatesAvailable ?? 0 }}</div>
+            <div class="burrow-muted">Last capture: {{ snapshot.capturedAt ?? 'Never' }}</div>
+        </div>
+        <div class="burrow-card">
+            <div class="burrow-muted">Contract Sync</div>
+            <div class="burrow-value">{{ contractSyncMeta.version ?? '-' }}</div>
+            <div class="burrow-muted">Last sync: {{ contractSyncMeta.syncedAt ?? 'Never' }}</div>
+        </div>
+        <div class="burrow-card">
+            <div class="burrow-muted">Backfill</div>
+            <div class="burrow-value">
+                {% if backfillStatus == 'completed' %}
+                    <span class="burrow-status-badge burrow-status-completed">Completed</span>
+                {% elseif backfillStatus == 'failed' %}
+                    <span class="burrow-status-badge burrow-status-failed">Failed</span>
+                {% else %}
+                    <span class="burrow-status-badge burrow-status-idle">Idle</span>
+                {% endif %}
+            </div>
+            <div class="burrow-muted">
+                {{ backfillState.accepted ?? 0 }} accepted, {{ backfillState.rejected ?? 0 }} rejected
+            </div>
+        </div>
+    </div>
+
+    <div style="margin: 12px 0 18px;">
+        <a class="btn" href="{{ cpUrl('burrow/settings') }}">Setup Wizard</a>
+        <a class="btn" href="{{ cpUrl('burrow/outbox') }}">View Outbox</a>
+        <form method="post" action="{{ actionUrl('burrow/settings/refresh-snapshot') }}" style="display:inline-block; margin-left:8px;">
+            {{ csrfInput() }}
+            <input type="hidden" name="returnTo" value="dashboard">
+            <button class="btn">Refresh Snapshot</button>
+        </form>
+    </div>
+
+    <h2>Connection</h2>
+    <table class="data fullwidth">
+        <tbody>
+        <tr><th>Base URL</th><td>{{ settings.baseUrl }}</td></tr>
+        <tr><th>Client ID</th><td>{{ state.clientId ?: '-' }}</td></tr>
+        <tr><th>Organization ID</th><td>{{ state.organizationId ?: '-' }}</td></tr>
+        <tr><th>Project Source ID</th><td>{{ state.projectSourceId ?: '-' }}</td></tr>
+        </tbody>
+    </table>
+
+    <div class="burrow-section">
+        <h2>Active Integrations</h2>
+        {% if integrationSummaryRows is empty %}
+            <p class="burrow-muted">No integrations selected.</p>
+        {% else %}
+            <div class="burrow-integration-summary">
+                {% for row in integrationSummaryRows %}
+                    <span class="burrow-integration-badge">
+                        {% if row.iconDataUri %}
+                            <img class="burrow-menu-glyph" src="{{ row.iconDataUri }}" alt="" aria-hidden="true">
+                        {% else %}
+                            <span class="burrow-icon-dot">{{ (row.label|slice(0, 1))|upper }}</span>
+                        {% endif %}
+                        <strong>{{ row.label }}</strong>
+                        {% if row.detail %}
+                            <span class="burrow-muted">{{ row.detail }}</span>
+                        {% endif %}
+                    </span>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="burrow-section">
+        <h2>Form Contracts</h2>
+        <table class="data fullwidth">
+            <thead>
+            <tr>
+                <th>Provider</th>
+                <th>Form</th>
+                <th>Form ID</th>
+                <th>Mode</th>
+                <th>Fields</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% if contractRows is empty %}
+                <tr><td colspan="5">No active contracts.</td></tr>
+            {% else %}
+                {% for row in contractRows %}
+                    <tr>
+                        <td>{{ row.provider }}</td>
+                        <td>{{ row.formName ?: '-' }}</td>
+                        <td>{{ row.externalFormId ?: '-' }}</td>
+                        <td>{{ row.mode }}</td>
+                        <td>{{ row.mappingCount }}</td>
+                    </tr>
+                {% endfor %}
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="burrow-section">
+        <h2>Data Backfill</h2>
+        <p class="burrow-muted">
+            Backfill replays historical events for configured providers into Burrow using deterministic source records.
+        </p>
+        <form method="post" action="{{ actionUrl('burrow/settings/start-backfill') }}">
+            {{ csrfInput() }}
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <div class="select">
+                    <select name="backfillWindowPreset">
+                        {% for preset, label in backfillPresets %}
+                            <option value="{{ preset }}" {{ preset == (backfillState.windowPreset ?? 'last_30_days') ? 'selected' : '' }}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <span>Run sources:</span>
+                {% if availableBackfillSources is empty %}
+                    <span class="burrow-muted">No eligible integrations configured yet.</span>
+                {% else %}
+                    {% for source in availableBackfillSources %}
+                        <label>
+                            <input type="checkbox" name="backfillSources[]" value="{{ source }}" {{ source in backfillSources ? 'checked' : '' }}>
+                            {{ source == 'ecommerce' ? 'Craft Commerce' : 'Forms' }}
+                        </label>
+                    {% endfor %}
+                {% endif %}
+                <button class="btn submit" {{ availableBackfillSources is empty ? 'disabled' : '' }}>Start New Backfill</button>
+            </div>
+        </form>
+        {% if backfillState is not empty %}
+            <p class="burrow-muted" style="margin-top:8px;">
+                Last run: {{ backfillState.completedAt ?? backfillState.startedAt ?? 'Never' }} |
+                Requested: {{ backfillState.requested ?? 0 }},
+                Accepted: {{ backfillState.accepted ?? 0 }},
+                Rejected: {{ backfillState.rejected ?? 0 }},
+                Validation rejected: {{ backfillState.validationRejected ?? 0 }}
+                {% if backfillState.error ?? '' %}
+                    | Error: {{ backfillState.error }}
+                {% endif %}
+            </p>
+        {% endif %}
+    </div>
+
+    <h2 style="margin-top: 20px;">Queue Status</h2>
+    <table class="data fullwidth">
+        <tbody>
+        <tr><th>Pending</th><td>{{ queueStats.pending }}</td></tr>
+        <tr><th>Retrying</th><td>{{ queueStats.retrying }}</td></tr>
+        <tr><th>Sent</th><td>{{ queueStats.sent }}</td></tr>
+        <tr><th>Failed</th><td>{{ queueStats.failed }}</td></tr>
+        </tbody>
+    </table>
+
+    <h2 style="margin-top: 20px;">System Snapshot</h2>
+    {% if snapshot.cms is defined %}
+        <p>
+            <strong>Craft:</strong> {{ snapshot.cms.version }}
+            {% if snapshot.cms.updateAvailable %}
+                (latest: {{ snapshot.cms.latestVersion }}, update available)
+            {% else %}
+                (up to date)
+            {% endif %}
+        </p>
+        <table class="data fullwidth">
+            <thead>
+            <tr>
+                <th>Plugin</th>
+                <th>Current</th>
+                <th>Latest</th>
+                <th>Status</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for pluginRow in snapshot.plugins ?? [] %}
+                <tr>
+                    <td>{{ pluginRow.name }} ({{ pluginRow.handle }})</td>
+                    <td>{{ pluginRow.version }}</td>
+                    <td>{{ pluginRow.latest }}</td>
+                    <td>{{ pluginRow.updateAvailable ? 'Update available' : 'Up to date' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>No snapshot captured yet.</p>
+    {% endif %}
+
+    <h2 style="margin-top: 20px;">Recent Logs</h2>
+    {% if logs is empty %}
+        <p>No logs yet.</p>
+    {% else %}
+        <table class="data fullwidth">
+            <thead>
+            <tr>
+                <th>When</th>
+                <th>Type</th>
+                <th>Provider</th>
+                <th>Message</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for log in logs %}
+                <tr>
+                    <td>{{ log.dateCreated }}</td>
+                    <td>{{ log.type }}</td>
+                    <td>{{ log.provider ?: '-' }}</td>
+                    <td>{{ log.message }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endblock %}

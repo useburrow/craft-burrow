@@ -1,0 +1,45 @@
+{
+    "name": "useburrow/craft-burrow",
+    "description": "Burrow bridge plugin for Craft CMS with onboarding, integrations, and system sync.",
+    "version": "5.0.0",
+    "type": "craft-plugin",
+    "keywords": ["craft", "cms", "craftcms", "craft-plugin", "burrow", "integration", "freeform", "formie", "commerce"],
+    "license": "proprietary",
+    "authors": [
+        {
+            "name": "useburrow",
+            "homepage": "https://useburrow.com"
+        }
+    ],
+    "support": {
+        "email": "contact@amiciinfotech.com",
+            "source": "https://github.com/useburrow/craft-burrow"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../../burrow-sdk/php",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "craftcms/cms": "^5.0",
+        "useburrow/sdk-php": "^0.9.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "amici\\Burrow\\": "src/"
+        }
+    },
+    "extra": {
+        "handle": "burrow",
+        "name": "Burrow",
+        "description": "Burrow bridge plugin for Craft CMS with onboarding, integrations, and system sync.",
+        "developer": "useburrow",
+        "developerUrl": "https://useburrow.com",
+        "class": "amici\\Burrow\\Plugin"
+    }
+}

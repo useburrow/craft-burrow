@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\models;
+namespace burrow\Burrow\models;
 
 use craft\base\Model;
 

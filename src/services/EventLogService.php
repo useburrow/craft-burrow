@@ -1,9 +1,9 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use craft\base\Component;
 
-use amici\Burrow\records\EventLogRecord;
+use burrow\Burrow\records\EventLogRecord;
 
 class EventLogService extends Component
 {

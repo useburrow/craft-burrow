@@ -1,9 +1,9 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use craft\base\Component;
 
-use amici\Burrow\records\RuntimeStateRecord;
+use burrow\Burrow\records\RuntimeStateRecord;
 
 class StateService extends Component
 {

@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\records;
+namespace burrow\Burrow\records;
 
 use craft\db\ActiveRecord;
 

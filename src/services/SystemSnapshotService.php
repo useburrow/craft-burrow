@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use Craft;
 use craft\base\Component;
@@ -13,7 +13,7 @@ class SystemSnapshotService extends Component
     {
         $updates = Craft::$app->getUpdates()->getUpdates(true);
         $cmsLatest = $updates->cms->getLatest()?->version ?? Craft::$app->getVersion();
-        $plugins = \amici\Burrow\Plugin::getInstance()->getIntegrations()->collectPluginVersionSnapshot();
+        $plugins = \burrow\Burrow\Plugin::getInstance()->getIntegrations()->collectPluginVersionSnapshot();
         $updateCount = 0;
         foreach ($plugins as $plugin) {
             if (!empty($plugin['updateAvailable'])) {

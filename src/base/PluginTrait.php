@@ -1,13 +1,13 @@
 <?php
-namespace amici\Burrow\base;
+namespace burrow\Burrow\base;
 
-use amici\Burrow\services\BurrowApiService;
-use amici\Burrow\services\BackfillService;
-use amici\Burrow\services\EventLogService;
-use amici\Burrow\services\IntegrationsService;
-use amici\Burrow\services\QueueService;
-use amici\Burrow\services\StateService;
-use amici\Burrow\services\SystemSnapshotService;
+use burrow\Burrow\services\BurrowApiService;
+use burrow\Burrow\services\BackfillService;
+use burrow\Burrow\services\EventLogService;
+use burrow\Burrow\services\IntegrationsService;
+use burrow\Burrow\services\QueueService;
+use burrow\Burrow\services\StateService;
+use burrow\Burrow\services\SystemSnapshotService;
 
 trait PluginTrait
 {

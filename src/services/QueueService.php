@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use Craft;
 use craft\base\Component;

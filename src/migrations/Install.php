@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\migrations;
+namespace burrow\Burrow\migrations;
 
 use craft\db\Migration;
 

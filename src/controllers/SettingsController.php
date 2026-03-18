@@ -1,11 +1,11 @@
 <?php
-namespace amici\Burrow\controllers;
+namespace burrow\Burrow\controllers;
 
 use Craft;
 use craft\web\Controller;
 use yii\web\Response;
 
-use amici\Burrow\Plugin;
+use burrow\Burrow\Plugin;
 
 class SettingsController extends Controller
 {

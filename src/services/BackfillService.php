@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use Craft;
 use craft\base\Component;
@@ -42,7 +42,7 @@ class BackfillService extends Component
             return $this->errorResult('No historical events found for the selected window and sources.');
         }
 
-        $plugin = \amici\Burrow\Plugin::getInstance();
+        $plugin = \burrow\Burrow\Plugin::getInstance();
         $settings = $plugin->getSettings();
         $sdkResult = $plugin->getBurrowApi()->submitBackfillEvents(
             $settings->baseUrl,
@@ -276,7 +276,7 @@ class BackfillService extends Component
             ->all();
 
         $formNames = [];
-        foreach (\amici\Burrow\Plugin::getInstance()->getIntegrations()->getFormieForms() as $form) {
+        foreach (\burrow\Burrow\Plugin::getInstance()->getIntegrations()->getFormieForms() as $form) {
             if (!is_array($form)) {
                 continue;
             }

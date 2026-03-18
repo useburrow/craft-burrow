@@ -1,11 +1,11 @@
 <?php
-namespace amici\Burrow;
+namespace burrow\Burrow;
 
 use Craft;
 use yii\base\Event;
 
-use amici\Burrow\base\PluginTrait;
-use amici\Burrow\models\Settings;
+use burrow\Burrow\base\PluginTrait;
+use burrow\Burrow\models\Settings;
 
 use craft\base\Model;
 use craft\base\Plugin as CraftPlugin;

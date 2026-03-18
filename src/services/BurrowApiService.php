@@ -1,5 +1,5 @@
 <?php
-namespace amici\Burrow\services;
+namespace burrow\Burrow\services;
 
 use Craft;
 use craft\base\Component;
@@ -299,7 +299,7 @@ class BurrowApiService extends Component
 
         return [
             'platform' => 'craft',
-            'pluginVersion' => \amici\Burrow\Plugin::getInstance()->getVersion(),
+            'pluginVersion' => \burrow\Burrow\Plugin::getInstance()->getVersion(),
             'site' => [
                 'url' => (string)(Craft::$app->getSites()->getPrimarySite()?->baseUrl ?? ''),
                 'cmsVersion' => Craft::$app->getVersion(),

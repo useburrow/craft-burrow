@@ -1,26 +1,35 @@
 # Burrow for Craft CMS 5
 
-`useburrow/craft-burrow` is a Craft CMS 5 plugin that connects a Craft site to Burrow through the Burrow PHP SDK. It provides a guided Control Panel onboarding flow, integration setup for supported Craft plugins, contract sync, system snapshot publishing, and operational screens for backfill, logs, and outbox visibility.
+Install a plugin. See everything.
 
-## Current Release
+[Burrow](https://useburrow.com) is the orchestration layer for agency operations. This plugin connects your Craft site to Burrow — detecting your installed integrations, syncing event data from forms and ecommerce, publishing system snapshots, and giving your team operational visibility across every client project.
 
-Version `5.0.0` includes:
+No webhook configurations in form plugins. No CSV imports. One plugin, total visibility.
 
-- 5-step onboarding wizard in the Craft Control Panel
-- Burrow project discovery and linking through the SDK
-- Integration setup for `Freeform`, `Formie`, and `Craft Commerce`
-- Forms contract generation and sync to Burrow
-- System snapshot capture and publish flow
-- Dashboard for connection, integrations, sync state, and recent logs
-- Outbox screen with retry and delete actions
-- Manual historical backfill for forms and ecommerce events
-- Runtime state, event log, and queue persistence in plugin tables
+## Why agencies install Burrow
 
-## Supported Mapping
+- **Install. Detect. Done.** — Drop the plugin into Craft and it scans your stack, detects Freeform, Formie, and Commerce, and starts syncing automatically.
+- **Event tracking for forms and ecommerce** — Form submissions and Commerce orders flow into Burrow as normalized events, scoped by organization, client, and project.
+- **System snapshots** — Publish your Craft version, PHP version, and installed plugin inventory so Burrow always has current environment context.
+- **Backfill your history** — Replay up to two years of form submissions and Commerce orders into Burrow with one click.
+- **Operational confidence** — Dashboard, outbox, event logs, retry controls, and queue visibility right in the Control Panel.
 
-- WordPress form plugin flows map to Craft form integrations through `Freeform` and `Formie`
-- WooCommerce-style commerce tracking maps to `Craft Commerce`
-- Stack health and update reporting maps to Craft + installed plugin snapshot data
+## Quick links
+
+- Package: `useburrow/craft-burrow`
+- Documentation: https://useburrow.com/docs
+- Issues: https://github.com/useburrow/craft-burrow/issues
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Source: https://github.com/useburrow/craft-burrow
+
+## Supported integrations
+
+| Integration | What Burrow tracks |
+|---|---|
+| **Freeform** | Form submissions, field mapping, per-form sync modes |
+| **Formie** | Form submissions, field mapping, per-form sync modes |
+| **Craft Commerce** | Orders, line items, ecommerce funnel events |
+| **Craft CMS** | System snapshots — Craft version, PHP version, installed plugins |
 
 ## Control Panel Flow
 
@@ -98,79 +107,41 @@ Operational visibility includes:
 
 ## Installation
 
-### Requirements
-
-- PHP `^8.2`
-- Craft CMS `^5.0`
-- Burrow PHP SDK `^0.9.2`
-
-### Composer
-
-Install the plugin and SDK in your Craft project:
-
-```json
-{
-  "require": {
-    "useburrow/craft-burrow": "^5.0",
-    "useburrow/sdk-php": "^0.9.2"
-  }
-}
+```bash
+composer require useburrow/craft-burrow
 ```
 
-If you are developing locally with path repositories, point Composer at this plugin and the Burrow SDK repository as needed.
+Then install the plugin from the Craft Control Panel or run:
 
-If the SDK is not installed, the Control Panel setup UI will still load, but Burrow discovery/link/sync actions will fail gracefully with a warning.
+```bash
+php craft plugin/install burrow
+```
 
-## Persistence Model
+### Requirements
 
-### Plugin Settings / Project Config
+- Craft CMS **5.0+**
+- PHP **8.2+**
 
-Minimal plugin settings:
+## Configuration
 
-- `baseUrl`
-- `apiKey`
-- `pluginName`
+The plugin stores three settings in project config:
 
-Avoid committing live Burrow credentials in project config or environment-specific config files.
+| Setting | Description |
+|---|---|
+| `baseUrl` | Burrow API endpoint |
+| `apiKey` | Burrow API key |
+| `pluginName` | Display name in the Control Panel |
 
-### Database Tables
+All runtime state (linked project, integrations, sync metadata, snapshots) is stored in plugin tables — not project config.
 
-- `burrow_runtime_state`
-  - linked org/client/project identifiers
-  - channel source IDs
-  - SDK state
-  - ingestion key metadata
-  - selected integrations and capabilities
-  - integration settings
-  - onboarding progress/completion
-  - latest system snapshot
-- `burrow_outbox`
-  - queued event payloads
-  - attempt counts and retry metadata
-  - failure and sent state
-- `burrow_outbox_sent`
-  - sent event key ledger for dedupe support
-- `burrow_event_logs`
-  - operational logs for onboarding, sync, snapshot, and backfill actions
+> Avoid committing live Burrow credentials in project config. Use environment variables where possible.
 
-## Key Files
+## About Burrow
 
-- `src/Plugin.php`: plugin bootstrap, CP navigation, and route registration
-- `src/controllers/SettingsController.php`: onboarding, dashboard, outbox, contract sync, snapshot, and backfill actions
-- `src/services/BurrowApiService.php`: Burrow SDK integration layer
-- `src/services/IntegrationsService.php`: provider discovery, capabilities, and contract building
-- `src/services/SystemSnapshotService.php`: Craft/system/plugin snapshot collector
-- `src/services/BackfillService.php`: historical event extraction and submission
-- `src/services/QueueService.php`: outbox operations and queue statistics
-- `src/services/EventLogService.php`: operational event logging
-- `src/services/StateService.php`: runtime state persistence
-- `src/templates/settings/index.twig`: onboarding wizard UI
-- `src/templates/dashboard/index.twig`: operational dashboard
-- `src/templates/outbox/index.twig`: outbox management UI
-- `src/migrations/Install.php`: initial plugin table install
+Burrow is the event-driven orchestration layer for agency operations. It ingests and normalizes signals from your entire stack — code, analytics, ecommerce, forms, monitoring — into a single event model scoped by organization, client, and project.
 
-## Notes
+- First-class plugins for **WordPress**, **Craft CMS**, **Statamic**, **ExpressionEngine**, and more.
+- PHP and TypeScript SDKs for custom integrations
+- Client portals, reporting, and AI-powered automation
 
-- The plugin is designed as a Craft-side bridge for Burrow onboarding and operational sync workflows.
-- Runtime state is stored in plugin tables rather than expanding project config beyond the minimal plugin settings.
-- This release focuses on onboarding, sync metadata, visibility, and backfill tooling for supported integrations.
+Learn more at [useburrow.com](https://useburrow.com).

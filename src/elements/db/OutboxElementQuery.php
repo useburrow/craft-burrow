@@ -7,6 +7,8 @@ class OutboxElementQuery extends ElementQuery
 {
     public ?string $outboxId = null;
     public ?string $outboxStatus = null;
+    public mixed $channel = null;
+    public mixed $eventName = null;
 
     public function outboxId(?string $value): static
     {
@@ -17,6 +19,18 @@ class OutboxElementQuery extends ElementQuery
     public function outboxStatus(?string $value): static
     {
         $this->outboxStatus = $value;
+        return $this;
+    }
+
+    public function channel(mixed $value): static
+    {
+        $this->channel = $value;
+        return $this;
+    }
+
+    public function eventName(mixed $value): static
+    {
+        $this->eventName = $value;
         return $this;
     }
 
@@ -54,6 +68,14 @@ class OutboxElementQuery extends ElementQuery
 
         if ($this->outboxStatus !== null && $this->outboxStatus !== '') {
             $this->subQuery->andWhere(['burrow_outbox_elements.outboxStatus' => $this->outboxStatus]);
+        }
+
+        if ($this->channel !== null) {
+            $this->subQuery->andWhere(\craft\helpers\Db::parseParam('burrow_outbox_elements.channel', $this->channel));
+        }
+
+        if ($this->eventName !== null) {
+            $this->subQuery->andWhere(\craft\helpers\Db::parseParam('burrow_outbox_elements.eventName', $this->eventName));
         }
 
         return parent::beforePrepare();

@@ -2,10 +2,12 @@
 namespace burrow\Burrow\elements;
 
 use burrow\Burrow\elements\actions\RetryOutboxAction;
+use burrow\Burrow\elements\conditions\OutboxCondition;
 use burrow\Burrow\elements\db\OutboxElementQuery;
 use Craft;
 use craft\base\Element;
 use craft\elements\actions\Delete;
+use craft\elements\conditions\ElementConditionInterface;
 use craft\helpers\Html;
 use craft\helpers\UrlHelper;
 
@@ -62,6 +64,11 @@ class OutboxElement extends Element
     public static function find(): OutboxElementQuery
     {
         return new OutboxElementQuery(static::class);
+    }
+
+    public static function createCondition(): ElementConditionInterface
+    {
+        return \Craft::createObject(OutboxCondition::class, [static::class]);
     }
 
     protected static function defineSources(string $context = 'index'): array
@@ -141,7 +148,7 @@ class OutboxElement extends Element
     public static function statuses(): array
     {
         return [
-            'pending' => ['label' => 'Pending', 'color' => 'orange'],
+            'pending' => ['label' => 'Pending', 'color' => 'blue'],
             'retrying' => ['label' => 'Retrying', 'color' => 'yellow'],
             'failed' => ['label' => 'Failed', 'color' => 'red'],
             'sent' => ['label' => 'Sent', 'color' => 'green'],
@@ -258,6 +265,24 @@ class OutboxElement extends Element
         return $html;
     }
 
+    private function statusBadgeHtml(): string
+    {
+        $status = $this->outboxStatus ?: 'pending';
+        [$dotColor, $bgColor, $textColor] = match ($status) {
+            'sent' => ['#16a34a', '#dcfce7', '#166534'],
+            'pending' => ['#2563eb', '#dbeafe', '#1e40af'],
+            'retrying' => ['#ca8a04', '#fef9c3', '#854d0e'],
+            'failed' => ['#dc2626', '#fee2e2', '#991b1b'],
+            default => ['#6b7280', '#f3f4f6', '#374151'],
+        };
+        $dot = Html::tag('span', '', [
+            'style' => "display:inline-block; width:8px; height:8px; border-radius:50%; background:{$dotColor}; margin-right:6px; flex-shrink:0;",
+        ]);
+        return Html::tag('span', $dot . Html::encode(strtoupper($status)), [
+            'style' => "display:inline-flex; align-items:center; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; letter-spacing:0.03em; background:{$bgColor}; color:{$textColor};",
+        ]);
+    }
+
     private function loadPayloadJson(): mixed
     {
         if ($this->outboxId === '') {
@@ -304,7 +329,7 @@ class OutboxElement extends Element
         return match ($attribute) {
             'eventKey' => Html::tag('code', Html::encode($this->eventKey !== '' ? ('...' . substr($this->eventKey, -12)) : '-'), ['style' => 'font-size:11px;']),
             'attemptCount' => (string)$this->attemptCount . ' / ' . (string)$this->maxAttempts,
-            'outboxStatus' => Html::encode(ucfirst($this->outboxStatus ?: 'pending')),
+            'outboxStatus' => $this->statusBadgeHtml(),
             'channel' => Html::encode($this->channel ?: '-'),
             'eventName' => Html::encode($this->eventName ?: '-'),
             'lastError' => Html::encode($this->lastError !== null && $this->lastError !== '' ? (mb_strlen($this->lastError) > 60 ? mb_substr($this->lastError, 0, 60) . '...' : $this->lastError) : '-'),

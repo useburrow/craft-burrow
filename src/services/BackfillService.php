@@ -283,6 +283,22 @@ class BackfillService extends Component
         $enabledFormIds = [];
         $formNames = [];
         $formConfigsById = [];
+
+        $liveFreeformNames = [];
+        foreach (\burrow\Burrow\Plugin::getInstance()->getIntegrations()->getFreeformForms() as $form) {
+            if (!is_array($form)) {
+                continue;
+            }
+            $id = (int)($form['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $liveName = trim((string)($form['name'] ?? ''));
+            if ($liveName !== '') {
+                $liveFreeformNames[$id] = $liveName;
+            }
+        }
+
         foreach ($config as $formId => $formConfig) {
             if (!is_array($formConfig)) {
                 continue;
@@ -295,21 +311,16 @@ class BackfillService extends Component
             if ($stringFormId === '') {
                 continue;
             }
-            $enabledFormIds[] = (int)$stringFormId;
-            $formNames[(int)$stringFormId] = trim((string)($formConfig['formName'] ?? ('Form ' . $stringFormId)));
-            $formConfigsById[(int)$stringFormId] = $formConfig;
+            $intFormId = (int)$stringFormId;
+            $enabledFormIds[] = $intFormId;
+            $configName = trim((string)($formConfig['formName'] ?? ''));
+            $formNames[$intFormId] = $configName !== '' ? $configName : ($liveFreeformNames[$intFormId] ?? ('Form ' . $stringFormId));
+            $formConfigsById[$intFormId] = $formConfig;
         }
         if (empty($enabledFormIds)) {
-            foreach (\burrow\Burrow\Plugin::getInstance()->getIntegrations()->getFreeformForms() as $form) {
-                if (!is_array($form)) {
-                    continue;
-                }
-                $id = (int)($form['id'] ?? 0);
-                if ($id <= 0) {
-                    continue;
-                }
+            foreach ($liveFreeformNames as $id => $name) {
                 $enabledFormIds[] = $id;
-                $formNames[$id] = trim((string)($form['name'] ?? ('Form ' . $id)));
+                $formNames[$id] = $name;
             }
             $enabledFormIds = array_values(array_unique($enabledFormIds));
         }

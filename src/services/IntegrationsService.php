@@ -294,7 +294,8 @@ class IntegrationsService extends Component
             }
             $known = $freeformForms[(string)$formId] ?? null;
             $externalId = trim((string)($config['externalFormId'] ?? $formId));
-            $formName = trim((string)($config['formName'] ?? ($known['name'] ?? ('Freeform ' . $formId))));
+            $configFormName = trim((string)($config['formName'] ?? ''));
+            $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Freeform ' . $formId));
             $formHandle = trim((string)($known['handle'] ?? ''));
             $prefixLower = strtolower($freeformPrefix) . '_';
             $contracts[] = [

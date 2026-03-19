@@ -45,6 +45,19 @@ class FormTrackingService extends Component
         $prefix = $this->resolveProviderPrefix($runtimeState, 'freeform', 'FF');
         $prefixedFormId = $prefix . $formId;
 
+        $configFormName = trim((string)($config['formName'] ?? ''));
+        $liveFormName = $this->extractSubmissionFormName($submission);
+        if (is_object($eventForm) && $liveFormName === '') {
+            foreach (['name', 'title', 'handle'] as $key) {
+                $value = trim((string)($eventForm->{$key} ?? ''));
+                if ($value !== '') {
+                    $liveFormName = $value;
+                    break;
+                }
+            }
+        }
+        $formName = $liveFormName !== '' ? $liveFormName : ($configFormName !== '' ? $configFormName : ('Form ' . $formId));
+
         $tags = [
             'provider' => 'freeform',
             'formId' => $prefixedFormId,
@@ -52,7 +65,7 @@ class FormTrackingService extends Component
         $properties = [
             'provider' => 'freeform',
             'formId' => $prefixedFormId,
-            'formName' => (string)($config['formName'] ?? ('Form ' . $formId)),
+            'formName' => $formName,
             'submissionId' => $submissionId,
             'submittedAt' => $timestamp,
             'isBackfill' => false,
@@ -172,7 +185,7 @@ class FormTrackingService extends Component
             }
             $byId[$formId] = [
                 'mode' => $mode,
-                'formName' => trim((string)($form['name'] ?? ('Form ' . $formId))),
+                'formName' => trim((string)($form['formName'] ?? '')) ?: ('Form ' . $formId),
                 'fields' => is_array($form['fields'] ?? null) ? $form['fields'] : [],
             ];
         }
@@ -197,30 +210,39 @@ class FormTrackingService extends Component
         if ($values === []) {
             return ['tags' => [], 'properties' => []];
         }
+        $normalizedValues = [];
+        foreach ($values as $key => $value) {
+            $normalizedValues[$this->normalizeFieldKey($key)] = $value;
+        }
 
         $tags = [];
         $properties = [];
-        foreach ($mappedFields as $fieldMap) {
-            if (!is_array($fieldMap)) {
+        foreach ($mappedFields as $fieldConfig) {
+            if (!is_array($fieldConfig)) {
                 continue;
             }
-            $enabled = (bool)($fieldMap['enabled'] ?? true);
-            if (!$enabled) {
+            $target = trim((string)($fieldConfig['target'] ?? ''));
+            if (!in_array($target, ['tags', 'properties'], true)) {
                 continue;
             }
-            $handle = trim((string)($fieldMap['handle'] ?? ''));
-            if ($handle === '' || !array_key_exists($handle, $values)) {
+            $canonicalKey = trim((string)($fieldConfig['canonicalKey'] ?? ''));
+            if ($canonicalKey === '') {
                 continue;
             }
-            $target = strtolower(trim((string)($fieldMap['target'] ?? 'tag')));
-            $label = trim((string)($fieldMap['label'] ?? $handle));
-            if ($label === '') {
-                $label = $handle;
+            $candidates = array_values(array_filter([
+                trim((string)($fieldConfig['externalFieldId'] ?? '')),
+                trim((string)($fieldConfig['sourceLabel'] ?? '')),
+                $canonicalKey,
+            ], static fn(string $value): bool => $value !== ''));
+
+            $value = $this->findSubmissionValue($values, $normalizedValues, $candidates);
+            if ($value === null || $value === '') {
+                continue;
             }
-            if ($target === 'property' || $target === 'properties') {
-                $properties[$label] = $values[$handle];
+            if ($target === 'tags') {
+                $tags[$canonicalKey] = $value;
             } else {
-                $tags[$label] = $values[$handle];
+                $properties[$canonicalKey] = $value;
             }
         }
 
@@ -228,6 +250,30 @@ class FormTrackingService extends Component
             'tags' => $tags,
             'properties' => $properties,
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $values
+     * @param array<string,mixed> $normalizedValues
+     * @param list<string> $candidates
+     */
+    private function findSubmissionValue(array $values, array $normalizedValues, array $candidates): mixed
+    {
+        foreach ($candidates as $candidate) {
+            if (array_key_exists($candidate, $values)) {
+                return $values[$candidate];
+            }
+            $normalized = $this->normalizeFieldKey($candidate);
+            if ($normalized !== '' && array_key_exists($normalized, $normalizedValues)) {
+                return $normalizedValues[$normalized];
+            }
+        }
+        return null;
+    }
+
+    private function normalizeFieldKey(string $key): string
+    {
+        return preg_replace('/[^a-z0-9]+/i', '', strtolower(trim($key))) ?? '';
     }
 
     private function extractSubmissionScalarValues(object $submission): array

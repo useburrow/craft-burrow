@@ -187,6 +187,7 @@ class OutboxElement extends Element
     public function prepareEditScreen(\yii\web\Response $response, string $containerId): void
     {
         /** @var \craft\web\CpScreenResponseBehavior $response */
+        $response->title(Craft::t('burrow', 'Event {id}', ['id' => $this->outboxId ?: $this->id]));
         $response->crumbs([
             [
                 'label' => Craft::t('burrow', 'Burrow'),
@@ -245,12 +246,12 @@ class OutboxElement extends Element
         $payload = $this->loadPayloadJson();
         if ($payload !== null) {
             $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            $html .= Html::tag('div', 
-                Html::tag('h3', Craft::t('burrow', 'Payload'), ['class' => 'heading'])
-                . Html::tag('pre', Html::encode($json), [
-                    'style' => 'background:var(--gray-050); padding:10px; border-radius:4px; font-size:11px; line-height:1.4; overflow:auto; max-height:400px; white-space:pre-wrap; word-break:break-all; border:1px solid var(--hairline-color);',
+            $html .= Html::tag('div',
+                Html::tag('h3', Craft::t('burrow', 'Payload'), ['class' => 'heading', 'style' => 'margin-bottom:8px;'])
+                . Html::tag('pre', Html::tag('code', Html::encode($json)), [
+                    'style' => 'background:#1e1e2e; color:#cdd6f4; padding:14px; border-radius:6px; font-size:11px; line-height:1.5; overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-all;',
                 ]),
-                ['style' => 'margin-top:14px;']
+                ['style' => 'padding:14px 0;']
             );
         }
 

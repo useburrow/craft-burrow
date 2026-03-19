@@ -10,15 +10,18 @@
     {% js %}
         (function() {
             var type = '{{ elementType|e("js") }}';
-            $('#main-content').on('click', '.element[data-type="' + type + '"]', function(ev) {
-                if (Garnish.isCtrlKeyPressed(ev) || ev.metaKey || ev.shiftKey) return;
+            var container = document.getElementById('main-content');
+            if (!container) return;
+            container.addEventListener('click', function(ev) {
+                if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+                var el = ev.target.closest('.element');
+                if (!el || el.dataset.type !== type) return;
+                var id = parseInt(el.dataset.id);
+                if (!id) return;
                 ev.preventDefault();
-                ev.stopPropagation();
-                var id = $(this).data('id');
-                if (id) {
-                    Craft.createElementEditor(type, {elementId: id});
-                }
-            });
+                ev.stopImmediatePropagation();
+                Craft.createElementEditor(type, {elementId: id});
+            }, true);
         })();
     {% endjs %}
 {% endblock %}

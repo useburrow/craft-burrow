@@ -143,6 +143,7 @@ class BurrowApiService extends Component
         ];
 
         $runtimeState['burrowProject'] = [
+            'name' => (string)($project['name'] ?? ''),
             'path' => (string)($project['burrowProjectPath'] ?? ''),
             'url' => (string)($project['burrowProjectUrl'] ?? ''),
         ];

@@ -25,7 +25,7 @@ class StateService extends Component
             'sourceIds' => is_array($record->sourceIds) ? $record->sourceIds : ['forms' => '', 'ecommerce' => '', 'system' => ''],
             'sdkState' => is_array($record->sdkState) ? $record->sdkState : [],
             'ingestionKey' => is_array($record->ingestionKey) ? $record->ingestionKey : ['key' => '', 'projectId' => '', 'keyPrefix' => ''],
-            'burrowProject' => is_array($record->burrowProject) ? $record->burrowProject : ['path' => '', 'url' => ''],
+            'burrowProject' => is_array($record->burrowProject) ? $record->burrowProject : ['name' => '', 'path' => '', 'url' => ''],
             'selectedIntegrations' => is_array($record->selectedIntegrations) ? $record->selectedIntegrations : [],
             'capabilities' => is_array($record->capabilities) ? $record->capabilities : ['forms' => [], 'ecommerce' => [], 'ecommerce_funnel' => false],
             'integrationSettings' => is_array($record->integrationSettings) ? $record->integrationSettings : [],
@@ -52,7 +52,7 @@ class StateService extends Component
         $record->sourceIds = (array)($state['sourceIds'] ?? ['forms' => '', 'ecommerce' => '', 'system' => '']);
         $record->sdkState = (array)($state['sdkState'] ?? []);
         $record->ingestionKey = (array)($state['ingestionKey'] ?? ['key' => '', 'projectId' => '', 'keyPrefix' => '']);
-        $record->burrowProject = (array)($state['burrowProject'] ?? ['path' => '', 'url' => '']);
+        $record->burrowProject = (array)($state['burrowProject'] ?? ['name' => '', 'path' => '', 'url' => '']);
         $record->selectedIntegrations = array_values(array_map('strval', (array)($state['selectedIntegrations'] ?? [])));
         $record->capabilities = (array)($state['capabilities'] ?? ['forms' => [], 'ecommerce' => [], 'ecommerce_funnel' => false]);
         $record->integrationSettings = (array)($state['integrationSettings'] ?? []);
@@ -76,7 +76,7 @@ class StateService extends Component
             'sourceIds' => ['forms' => '', 'ecommerce' => '', 'system' => ''],
             'sdkState' => [],
             'ingestionKey' => ['key' => '', 'projectId' => '', 'keyPrefix' => ''],
-            'burrowProject' => ['path' => '', 'url' => ''],
+            'burrowProject' => ['name' => '', 'path' => '', 'url' => ''],
             'selectedIntegrations' => [],
             'capabilities' => ['forms' => [], 'ecommerce' => [], 'ecommerce_funnel' => false],
             'integrationSettings' => [],

@@ -153,58 +153,21 @@ class SettingsController extends Controller
         $settings = $plugin->getSettings();
         $state = $plugin->getState()->getState();
         $queueStats = $plugin->getQueue()->stats();
-        $logs = $plugin->getLogs()->latest(50);
-        $snapshot = is_array($state['lastSnapshot'] ?? null) ? $state['lastSnapshot'] : [];
         $formsContracts = $plugin->getIntegrations()->buildFormsContracts($state);
         $integrationSettings = is_array($state['integrationSettings'] ?? null) ? $state['integrationSettings'] : [];
         $backfillState = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
         $operationsSettings = is_array($integrationSettings['operations'] ?? null) ? $integrationSettings['operations'] : [];
-        $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
-        $outboxRetentionDays = (int)($operationsSettings['outboxRetentionDays'] ?? 30);
-        $outboxRetentionDays = max(1, min(365, $outboxRetentionDays));
+        $outboxRetentionDays = max(1, min(365, (int)($operationsSettings['outboxRetentionDays'] ?? 30)));
         $availableSources = $plugin->getBackfill()->availableSources($state);
         $backfillSources = array_values(array_filter(array_map('strval', (array)($backfillState['sources'] ?? $availableSources))));
         $backfillPresets = $plugin->getBackfill()->presetOptions();
 
-        $contractsByProvider = [];
-        foreach ($formsContracts as $contract) {
-            $providerKey = trim((string)($contract['provider'] ?? ''));
-            if ($providerKey === '' || empty($contract['enabled'])) {
-                continue;
-            }
-            $contractsByProvider[$providerKey] = (int)($contractsByProvider[$providerKey] ?? 0) + 1;
-        }
-        $integrationSummaryRows = [];
         $integrationLabels = $plugin->getIntegrations()->integrationLabels();
-        $availableIntegrations = $plugin->getIntegrations()->getAvailableIntegrations();
-        foreach ((array)($state['selectedIntegrations'] ?? []) as $integrationKey) {
-            $integrationKey = (string)$integrationKey;
-            $detail = '';
-            if (in_array($integrationKey, ['freeform', 'formie'], true)) {
-                $count = (int)($contractsByProvider[$integrationKey] ?? 0);
-                $detail = $count . ' form' . ($count === 1 ? '' : 's');
-            } elseif ($integrationKey === 'commerce') {
-                $commerce = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
-                $mode = (string)($commerce['mode'] ?? 'track');
-                $funnel = !empty($commerce['ecommerceFunnel']);
-                if ($mode !== 'track') {
-                    $detail = 'Off';
-                } elseif ($funnel) {
-                    $detail = 'Orders and line items + Funnel';
-                } else {
-                    $detail = 'Orders and line items';
-                }
-            }
-            $integrationSummaryRows[] = [
-                'label' => (string)($integrationLabels[$integrationKey] ?? $integrationKey),
-                'detail' => $detail,
-                'iconDataUri' => (string)($availableIntegrations[$integrationKey]['iconDataUri'] ?? ''),
-            ];
-        }
-        $selectedIntegrationNames = array_values(array_map(
+        $integrationNames = array_values(array_map(
             static fn(string $key): string => (string)($integrationLabels[$key] ?? $key),
             array_values(array_filter(array_map('strval', (array)($state['selectedIntegrations'] ?? []))))
         ));
+
         $projectUrl = trim((string)($state['burrowProject']['url'] ?? ''));
         if ($projectUrl === '') {
             $path = trim((string)($state['burrowProject']['path'] ?? ''));
@@ -221,12 +184,8 @@ class SettingsController extends Controller
         }
 
         return $this->renderTemplate('burrow/dashboard/index', [
-            'settings' => $settings,
             'state' => $state,
             'queueStats' => $queueStats,
-            'logs' => $logs,
-            'snapshot' => $snapshot,
-            'integrationSummaryRows' => $integrationSummaryRows,
             'contractRows' => array_values(array_map(static function (array $contract) use ($integrationLabels): array {
                 $providerKey = trim((string)($contract['provider'] ?? ''));
                 $mode = trim((string)($contract['mode'] ?? 'count_only'));
@@ -246,8 +205,7 @@ class SettingsController extends Controller
             'availableBackfillSources' => $availableSources,
             'backfillPresets' => $backfillPresets,
             'outboxRetentionDays' => $outboxRetentionDays,
-            'systemJobs' => $systemJobs,
-            'selectedIntegrationNames' => $selectedIntegrationNames,
+            'integrationNames' => $integrationNames,
             'projectUrl' => $projectUrl,
             'selectedSubnavItem' => 'dashboard',
         ]);

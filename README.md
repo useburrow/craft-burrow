@@ -140,7 +140,7 @@ All runtime state (linked project, integrations, sync metadata, snapshots) is st
 
 Burrow is the event-driven orchestration layer for agency operations. It ingests and normalizes signals from your entire stack — code, analytics, ecommerce, forms, monitoring — into a single event model scoped by organization, client, and project.
 
-- First-class plugins for **WordPress**, **Craft CMS**, **Statamic**, **ExpressionEngine**, and more.
+- First-class Craft CMS integration for agency operations workflows.
 - PHP and TypeScript SDKs for custom integrations
 - Client portals, reporting, and AI-powered automation
 

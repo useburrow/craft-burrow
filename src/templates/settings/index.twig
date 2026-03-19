@@ -2,6 +2,7 @@
 {% import "_includes/forms" as forms %}
 
 {% set title = "Burrow Setup"|t('burrow') %}
+{% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = 'settings' %}
 {% set fullPageForm = false %}
 
@@ -100,7 +101,6 @@
                             <tr>
                                 <th></th>
                                 <th>Project</th>
-                                <th>Organization</th>
                                 <th>Client</th>
                             </tr>
                         </thead>
@@ -109,8 +109,7 @@
                                 <tr>
                                     <td><input type="radio" name="projectSelection" value="{{ project|json_encode|e('html_attr') }}" required></td>
                                     <td>{{ project.projectName ?: project.projectId }}</td>
-                                    <td>{{ project.organizationId }}</td>
-                                    <td>{{ project.clientId }}</td>
+                                    <td>{{ project.clientName ?: project.clientId }}</td>
                                 </tr>
                             {% endfor %}
                         </tbody>
@@ -123,31 +122,38 @@
 
         {% elseif step == 'integrations' %}
             <p class="burrow-muted">Select integration providers to bridge into Burrow.</p>
+            {% set installedIntegrationEntries = [] %}
+            {% for key, integration in availableIntegrations %}
+                {% if integration.installed %}
+                    {% set installedIntegrationEntries = installedIntegrationEntries|merge([{ key: key, integration: integration }]) %}
+                {% endif %}
+            {% endfor %}
 
             <form method="post" action="{{ actionUrl('burrow/settings/save-integrations') }}">
                 {{ csrfInput() }}
-                {% for key, integration in availableIntegrations %}
-                    <div style="margin: 10px 0;">
-                        <label>
-                            <input
-                                class="burrow-integration-checkbox"
-                                type="checkbox"
-                                name="integrations[]"
-                                value="{{ key }}"
-                                {{ key in state.selectedIntegrations ? 'checked' : '' }}
-                                {{ not integration.installed ? 'disabled' : '' }}
-                            >
-                            <strong>{{ integration.label }}</strong>
-                            {% if integration.installed %}
-                                <span class="burrow-muted">Installed (v{{ integration.version }})</span>
-                            {% else %}
-                                <span class="burrow-muted">Not installed</span>
-                            {% endif %}
-                        </label>
-                    </div>
-                {% endfor %}
+                {% if installedIntegrationEntries is empty %}
+                    <p class="burrow-muted">No supported integrations are currently installed.</p>
+                {% else %}
+                    {% for entry in installedIntegrationEntries %}
+                        {% set key = entry.key %}
+                        {% set integration = entry.integration %}
+                        <div style="margin: 10px 0;">
+                            <label>
+                                <input
+                                    class="burrow-integration-checkbox"
+                                    type="checkbox"
+                                    name="integrations[]"
+                                    value="{{ key }}"
+                                    {{ key in state.selectedIntegrations ? 'checked' : '' }}
+                                >
+                                <strong>{{ integration.label }}</strong>
+                                <span class="burrow-muted">(v{{ integration.version }})</span>
+                            </label>
+                        </div>
+                    {% endfor %}
+                {% endif %}
                 <div style="margin-top: 15px;">
-                    <button id="burrow-save-integrations" class="btn submit">Save Integrations</button>
+                    <button id="burrow-save-integrations" class="btn submit" {{ installedIntegrationEntries is empty ? 'disabled' : '' }}>Save Integrations</button>
                 </div>
             </form>
             <script>
@@ -400,29 +406,29 @@
 
         {% elseif step == 'commerce' %}
             {% set commerceConfig = integrationStepData.settings.commerce ?? {} %}
-            <p class="burrow-muted">Choose how Craft Commerce events should be tracked.</p>
+            <p class="burrow-muted">Choose how Craft Commerce should be handled for this project.</p>
             <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
                 {{ csrfInput() }}
                 <input type="hidden" name="integration" value="commerce">
                 <fieldset>
-                    <legend><strong>Commerce tracking</strong></legend>
+                    <legend><strong>Tracking mode</strong></legend>
                     {{ forms.radio({
                         name: 'commerceMode',
                         value: 'track',
                         checked: (commerceConfig.mode ?? 'track') == 'track',
-                        label: 'Track events'
+                        label: 'Track Craft Commerce events'
                     }) }}<br>
                     {{ forms.radio({
                         name: 'commerceMode',
                         value: 'off',
                         checked: (commerceConfig.mode ?? 'track') == 'off',
-                        label: 'Do not track events'
+                        label: 'Do not track Craft Commerce events'
                     }) }}
                 </fieldset>
                 <div style="margin-top: 10px;">
                     <label>
                         <input type="checkbox" name="ecommerceFunnel" value="1" {{ (commerceConfig.ecommerceFunnel ?? false) ? 'checked' : '' }}>
-                        Enable cart and checkout funnel tracking
+                        Enable cart & checkout funnel tracking (add-to-cart, checkout started, abandoned checkout, cart recovery)
                     </label>
                 </div>
                 <div style="margin-top: 16px;">
@@ -574,7 +580,7 @@
                 </tbody>
             </table>
 
-            <h2 style="margin-top:24px;">WooCommerce</h2>
+            <h2 style="margin-top:24px;">Craft Commerce</h2>
             {% set commerceConfig = state.integrationSettings.commerce ?? {} %}
             {% if 'commerce' in state.selectedIntegrations and (commerceConfig.mode ?? 'track') == 'track' %}
                 <p>Tracking <code>ecommerce.order.placed</code> and <code>ecommerce.item.purchased</code> events for all Craft Commerce orders.</p>
@@ -584,15 +590,18 @@
 
             <h2 style="margin-top:24px;">Data Backfill</h2>
             {% set backfillMeta = state.integrationSettings.backfill ?? {} %}
-            <p>
-                {% if (backfillMeta.status ?? '') == 'completed' %}
-                    <span class="burrow-muted">Completed: {{ backfillMeta.accepted ?? 0 }} accepted</span>
-                {% elseif (backfillMeta.status ?? '') == 'failed' %}
-                    <span class="burrow-muted">Failed</span>
+            {% set backfillStatus = backfillMeta.status ?? '' %}
+            <p class="burrow-muted">
+                {% if backfillStatus == 'completed' %}
+                    Last backfill completed: {{ backfillMeta.accepted ?? 0 }} accepted, {{ backfillMeta.rejected ?? 0 }} rejected.
+                {% elseif backfillStatus == 'failed' %}
+                    Last backfill failed. Open Dashboard to review and retry.
                 {% else %}
-                    <span class="burrow-muted">Idle</span>
+                    Next step: run your first backfill in Dashboard to import historical forms and Craft Commerce orders.
                 {% endif %}
-                <a href="{{ cpUrl('burrow/dashboard') }}">Manage in Dashboard</a>
+            </p>
+            <p>
+                <a class="btn" href="{{ cpUrl('burrow/dashboard') }}#data-backfill">Run Backfill in Dashboard</a>
             </p>
             <p style="margin-top:20px;">
                 <a class="btn submit" href="{{ cpUrl('burrow/dashboard') }}">Go to Dashboard</a>

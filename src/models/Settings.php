@@ -6,7 +6,7 @@ use craft\base\Model;
 class Settings extends Model
 {
     public string $pluginName = 'Burrow';
-    public string $baseUrl = 'https://api.useburrow.com';
+    public string $baseUrl = 'https://app.useburrow.com';
     public string $apiKey = '';
 
     public function defineRules(): array

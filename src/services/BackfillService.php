@@ -540,7 +540,16 @@ class BackfillService extends Component
                 $itemCount = max(0, (int)round($this->objectFloatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
             }
             $shippingMethod = $this->extractCommerceShippingMethod($order);
-            $tags = ['provider' => 'craft-commerce'];
+            $shippingAddress = $this->extractCommerceShippingAddress($order);
+            $paymentMethod = $this->extractCommercePaymentMethod($order);
+            $customerToken = $this->extractCommerceCustomerToken($order);
+            $isGuest = $this->extractCommerceIsGuest($order);
+            $couponCode = $this->objectStringValue($order, ['couponCode']);
+
+            $tags = [
+                'provider' => 'craft-commerce',
+                'currency' => $currency,
+            ];
             if ($orderReference !== '') {
                 $tags['orderReference'] = $orderReference;
             }
@@ -549,6 +558,24 @@ class BackfillService extends Component
             }
             if ($shippingMethod !== '') {
                 $tags['shippingMethod'] = $shippingMethod;
+            }
+            if ($shippingAddress['country'] !== '') {
+                $tags['shippingCountry'] = $shippingAddress['country'];
+            }
+            if ($shippingAddress['region'] !== '') {
+                $tags['shippingRegion'] = $shippingAddress['region'];
+            }
+            if ($paymentMethod !== '') {
+                $tags['paymentMethod'] = $paymentMethod;
+            }
+            if ($customerToken !== '') {
+                $tags['customerToken'] = $customerToken;
+            }
+            if ($isGuest !== '') {
+                $tags['isGuest'] = $isGuest;
+            }
+            if ($couponCode !== '') {
+                $tags['couponCode'] = $couponCode;
             }
 
             $built = $api->buildEcommerceOrderAndItemEvents($runtimeState, [
@@ -560,7 +587,9 @@ class BackfillService extends Component
                 'timestamp' => $submittedAt,
                 'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
                 'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
+                'shipping' => $this->objectFloatValue($order, ['totalShippingCost', 'adjustmentSubtotal']),
                 'externalEntityId' => 'craft_order_' . $orderId,
+                'customerToken' => $customerToken,
                 'tags' => $tags,
                 'items' => $items,
             ]);
@@ -984,6 +1013,71 @@ class BackfillService extends Component
             return $this->objectStringValue($shippingMethod, ['name', 'handle', 'id']);
         }
 
+        return '';
+    }
+
+    /**
+     * @return array{country: string, region: string}
+     */
+    private function extractCommerceShippingAddress(object $order): array
+    {
+        $result = ['country' => '', 'region' => ''];
+        $address = null;
+        if (method_exists($order, 'getShippingAddress')) {
+            $address = $order->getShippingAddress();
+        } elseif (isset($order->shippingAddress)) {
+            $address = $order->shippingAddress;
+        }
+        if (!is_object($address)) {
+            return $result;
+        }
+        $result['country'] = $this->objectStringValue($address, ['countryCode', 'country']);
+        $result['region'] = $this->objectStringValue($address, ['administrativeArea', 'stateText', 'state', 'province']);
+        return $result;
+    }
+
+    private function extractCommercePaymentMethod(object $order): string
+    {
+        if (method_exists($order, 'getGateway')) {
+            $gateway = $order->getGateway();
+            if (is_object($gateway)) {
+                $name = $this->objectStringValue($gateway, ['name', 'handle']);
+                if ($name !== '') {
+                    return $name;
+                }
+            }
+        }
+        $gatewayId = $this->objectStringValue($order, ['gatewayId']);
+        if ($gatewayId !== '') {
+            return $gatewayId;
+        }
+        return $this->objectStringValue($order, ['paymentMethodName', 'paymentSource']);
+    }
+
+    private function extractCommerceCustomerToken(object $order): string
+    {
+        $email = $this->objectStringValue($order, ['email']);
+        if ($email !== '') {
+            return 'craft_' . hash('sha256', strtolower(trim($email)));
+        }
+        $customerId = $this->objectStringValue($order, ['customerId']);
+        if ($customerId !== '') {
+            return 'craft_cust_' . $customerId;
+        }
+        return '';
+    }
+
+    private function extractCommerceIsGuest(object $order): string
+    {
+        if (method_exists($order, 'getUser')) {
+            return $order->getUser() === null ? 'true' : 'false';
+        }
+        if (method_exists($order, 'getCustomer')) {
+            return $order->getCustomer() === null ? 'true' : 'false';
+        }
+        if (isset($order->isGuest)) {
+            return $order->isGuest ? 'true' : 'false';
+        }
         return '';
     }
 

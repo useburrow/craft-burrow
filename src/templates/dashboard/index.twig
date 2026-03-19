@@ -1,14 +1,16 @@
 {% extends "_layouts/cp" %}
 
 {% set title = "Burrow Dashboard"|t('burrow') %}
+{% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'dashboard' %}
 
 {% block content %}
     <style>
-        .burrow-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; margin: 16px 0; }
-        .burrow-card { border:1px solid #e3e5e8; border-radius: 6px; padding: 14px; background:#fff; }
-        .burrow-value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+        .burrow-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; margin: 16px 0 18px; }
+        .burrow-card { border:1px solid #e3e5e8; border-radius: 8px; padding: 14px 16px; background:#fff; }
+        .burrow-value { font-size: 30px; line-height: 1.05; font-weight: 700; margin-top: 6px; letter-spacing: -0.02em; }
         .burrow-muted { color: #667085; }
+        .burrow-card .burrow-muted { font-size: 13px; }
         .burrow-status-badge {
             display: inline-flex;
             align-items: center;
@@ -28,25 +30,32 @@
         .burrow-integration-badge { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; background:#f0f6fc; border:1px solid #c3d0e0; border-radius:4px; font-size:13px; }
         .burrow-menu-glyph { width:16px; height:16px; object-fit:contain; }
         .burrow-icon-dot { width: 16px; height: 16px; border-radius: 50%; background: #0d66d0; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+        .burrow-note-list { margin: 0 0 10px 18px; color: #667085; }
+        .burrow-note-list li { margin: 3px 0; }
     </style>
 
     {% set contractSyncMeta = state.integrationSettings.contractSync ?? {} %}
     {% set backfillStatus = backfillState.status ?? 'idle' %}
+    {% set outboxPendingTotal = queueStats.pending + queueStats.retrying %}
 
     <div class="burrow-grid">
         <div class="burrow-card">
             <div class="burrow-muted">Linked Project</div>
             <div class="burrow-value">{{ state.projectId ?: 'Not linked' }}</div>
+            {% if projectUrl %}
+                <div style="margin-top: 6px;"><a href="{{ projectUrl }}" target="_blank" rel="noopener noreferrer">View in Burrow &#8594;</a></div>
+            {% endif %}
         </div>
         <div class="burrow-card">
             <div class="burrow-muted">Integrations</div>
-            <div class="burrow-value">{{ state.selectedIntegrations|length }}</div>
-            <div class="burrow-muted">{{ state.selectedIntegrations|join(', ') ?: 'None selected' }}</div>
+            <div class="burrow-value">{{ selectedIntegrationNames|length }}</div>
+            <div class="burrow-muted">{{ selectedIntegrationNames|join(', ') ?: 'None selected' }}</div>
         </div>
         <div class="burrow-card">
-            <div class="burrow-muted">Outbox Pending</div>
-            <div class="burrow-value">{{ queueStats.pending + queueStats.retrying }}</div>
-            <div class="burrow-muted">Failed: {{ queueStats.failed }} | Sent: {{ queueStats.sent }}</div>
+            <div class="burrow-muted">Outbox</div>
+            <div class="burrow-value">{{ outboxPendingTotal }}</div>
+            <div class="burrow-muted">Pending + retrying</div>
+            <div class="burrow-muted" style="margin-top: 4px;">Failed: {{ queueStats.failed }} | Sent: {{ queueStats.sent }}</div>
         </div>
         <div class="burrow-card">
             <div class="burrow-muted">Snapshot Updates</div>
@@ -72,6 +81,9 @@
             <div class="burrow-muted">
                 {{ backfillState.accepted ?? 0 }} accepted, {{ backfillState.rejected ?? 0 }} rejected
             </div>
+            {% if backfillStatus == 'idle' %}
+                <div class="burrow-muted" style="margin-top: 4px;">Next step: run your first backfill below.</div>
+            {% endif %}
         </div>
     </div>
 
@@ -88,6 +100,15 @@
     <h2>Connection</h2>
     <table class="data fullwidth">
         <tbody>
+        <tr>
+            <th>Connected Project</th>
+            <td>
+                <code>{{ state.projectId ?: '-' }}</code>
+                {% if projectUrl %}
+                    &nbsp;<a href="{{ projectUrl }}" target="_blank" rel="noopener noreferrer">View in Burrow &#8594;</a>
+                {% endif %}
+            </td>
+        </tr>
         <tr><th>Base URL</th><td>{{ settings.baseUrl }}</td></tr>
         <tr><th>Client ID</th><td>{{ state.clientId ?: '-' }}</td></tr>
         <tr><th>Organization ID</th><td>{{ state.organizationId ?: '-' }}</td></tr>
@@ -149,9 +170,23 @@
     </div>
 
     <div class="burrow-section">
-        <h2>Data Backfill</h2>
-        <p class="burrow-muted">
-            Backfill replays historical events for configured providers into Burrow using deterministic source records.
+        <h2 id="data-backfill">Data Backfill</h2>
+        <ul class="burrow-note-list">
+            <li>Backfill includes events for configured form contracts.</li>
+            <li>Craft Commerce orders and line items are included when Commerce tracking is enabled.</li>
+            <li>Reruns use deterministic event keys; duplicate protection depends on outbox retention history.</li>
+        </ul>
+        <p>
+            {% if backfillStatus == 'completed' %}
+                <span class="burrow-status-badge burrow-status-completed">Completed</span>
+            {% elseif backfillStatus == 'failed' %}
+                <span class="burrow-status-badge burrow-status-failed">Failed</span>
+            {% else %}
+                <span class="burrow-status-badge burrow-status-idle">Idle</span>
+            {% endif %}
+            <span class="burrow-muted" style="margin-left:8px;">
+                {{ backfillState.accepted ?? 0 }} accepted, {{ backfillState.rejected ?? 0 }} rejected
+            </span>
         </p>
         <form method="post" action="{{ actionUrl('burrow/settings/start-backfill') }}">
             {{ csrfInput() }}
@@ -175,6 +210,7 @@
                     {% endfor %}
                 {% endif %}
                 <button class="btn submit" {{ availableBackfillSources is empty ? 'disabled' : '' }}>Start New Backfill</button>
+                <a class="btn" href="{{ cpUrl('burrow/backfill-probe', { windowPreset: backfillState.windowPreset ?? 'last_90_days' }) }}">Backfill Probe</a>
             </div>
         </form>
         {% if backfillState is not empty %}
@@ -189,6 +225,18 @@
                 {% endif %}
             </p>
         {% endif %}
+        <form method="post" action="{{ actionUrl('burrow/settings/save-operations-settings') }}" style="margin-top: 10px;">
+            {{ csrfInput() }}
+            <label for="burrow-outbox-retention-days"><strong>Outbox retention</strong></label>
+            <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input id="burrow-outbox-retention-days" class="text" type="number" name="outboxRetentionDays" min="1" max="365" step="1" value="{{ outboxRetentionDays ?? 30 }}" style="width:90px;">
+                <span class="burrow-muted">days</span>
+                <button class="btn">Save Settings</button>
+            </div>
+            <p class="burrow-muted" style="margin-top:6px;">
+                Sent and failed records are cleaned up using this retention window. Longer retention preserves duplicate protection for reruns.
+            </p>
+        </form>
     </div>
 
     <h2 style="margin-top: 20px;">Queue Status</h2>
@@ -198,6 +246,45 @@
         <tr><th>Retrying</th><td>{{ queueStats.retrying }}</td></tr>
         <tr><th>Sent</th><td>{{ queueStats.sent }}</td></tr>
         <tr><th>Failed</th><td>{{ queueStats.failed }}</td></tr>
+        </tbody>
+    </table>
+
+    <h2 style="margin-top: 20px;">System Jobs</h2>
+    {% set systemJobs = systemJobs ?? {} %}
+    <table class="data fullwidth">
+        <tbody>
+        <tr>
+            <th>Snapshot schedule</th>
+            <td>Weekly</td>
+        </tr>
+        <tr>
+            <th>Snapshot last run</th>
+            <td>{{ systemJobs.snapshotLastRunAt ?? 'Never' }}</td>
+        </tr>
+        <tr>
+            <th>Snapshot queued</th>
+            <td>{{ systemJobs.snapshotQueuedAt ?? 'Not queued' }}</td>
+        </tr>
+        <tr>
+            <th>Snapshot last error</th>
+            <td>{{ systemJobs.snapshotLastError ?? 'None' }}</td>
+        </tr>
+        <tr>
+            <th>Heartbeat schedule</th>
+            <td>Hourly</td>
+        </tr>
+        <tr>
+            <th>Heartbeat last run</th>
+            <td>{{ systemJobs.heartbeatLastRunAt ?? 'Never' }}</td>
+        </tr>
+        <tr>
+            <th>Heartbeat queued</th>
+            <td>{{ systemJobs.heartbeatQueuedAt ?? 'Not queued' }}</td>
+        </tr>
+        <tr>
+            <th>Heartbeat last error</th>
+            <td>{{ systemJobs.heartbeatLastError ?? 'None' }}</td>
+        </tr>
         </tbody>
     </table>
 

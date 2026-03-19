@@ -1,0 +1,84 @@
+{% extends "_layouts/cp" %}
+
+{% set title = "Backfill Probe"|t('burrow') %}
+{% set selectedNavItem = 'burrow' %}
+{% set selectedSubnavItem = selectedSubnavItem ?? 'dashboard' %}
+
+{% block content %}
+    <h2>Backfill Probe</h2>
+    <p class="light">This is a diagnostics view to verify native query visibility before event submission.</p>
+
+    <form method="get" action="{{ cpUrl('burrow/backfill-probe') }}" style="margin: 10px 0 16px; display:flex; gap:8px; align-items:center;">
+        <div class="select">
+            <select name="windowPreset">
+                {% for key, label in presetOptions %}
+                    <option value="{{ key }}" {{ key == windowPreset ? 'selected' : '' }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button class="btn">Refresh Probe</button>
+        <a class="btn" href="{{ cpUrl('burrow/dashboard') }}#data-backfill">Back to Dashboard</a>
+    </form>
+
+    <table class="data fullwidth" style="max-width: 900px; margin-bottom: 16px;">
+        <tbody>
+        <tr><th>Window start</th><td><code>{{ probe.windowStart }}</code></td></tr>
+        <tr><th>Window end</th><td><code>{{ probe.windowEnd }}</code></td></tr>
+        <tr><th>Project ID</th><td><code>{{ probe.projectId ?: '-' }}</code></td></tr>
+        <tr><th>Forms source ID</th><td><code>{{ probe.sourceIds.forms ?: '-' }}</code></td></tr>
+        <tr><th>Ecommerce source ID</th><td><code>{{ probe.sourceIds.ecommerce ?: '-' }}</code></td></tr>
+        <tr><th>System source ID</th><td><code>{{ probe.sourceIds.system ?: '-' }}</code></td></tr>
+        <tr><th>Available sources</th><td>{{ probe.availableSources|join(', ') ?: 'none' }}</td></tr>
+        <tr><th>Built form events</th><td>{{ probe.eventCounts.forms ?? 0 }}</td></tr>
+        <tr><th>Built ecommerce events</th><td>{{ probe.eventCounts.ecommerce ?? 0 }}</td></tr>
+        </tbody>
+    </table>
+
+    {% set sections = {
+        freeform: 'Freeform submissions',
+        formie: 'Formie submissions',
+        commerce: 'Commerce orders'
+    } %}
+
+    {% for key, label in sections %}
+        {% set section = attribute(probe, key) ?? {} %}
+        <h3>{{ label }}</h3>
+        <p>
+            <strong>Available:</strong> {{ section.available ? 'yes' : 'no' }},
+            <strong>Scanned:</strong> {{ section.scanned ?? 0 }},
+            <strong>In window:</strong> {{ section.inWindow ?? 0 }}
+            {% if key == 'commerce' %}
+                , <strong>Placed signal:</strong> {{ section.placedEligible ?? 0 }}
+                , <strong>Status signal present:</strong> {{ section.statusSignalPresent ?? 0 }}
+                , <strong>Backfill eligible:</strong> {{ section.backfillEligible ?? 0 }}
+            {% endif %}
+            {% if section.error ?? '' %}
+                , <strong>Error:</strong> {{ section.error }}
+            {% endif %}
+        </p>
+
+        {% set samples = section.samples ?? [] %}
+        {% if samples is empty %}
+            <p class="light">No sample records.</p>
+        {% else %}
+            <table class="data fullwidth" style="max-width: 900px; margin-bottom: 14px;">
+                <thead>
+                <tr>
+                    {% for column, value in samples[0] %}
+                        <th>{{ column }}</th>
+                    {% endfor %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for sample in samples %}
+                    <tr>
+                        {% for column, value in sample %}
+                            <td>{{ value is same as(null) ? '-' : value }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    {% endfor %}
+{% endblock %}

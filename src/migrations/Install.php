@@ -78,11 +78,43 @@ class Install extends Migration
             $this->createIndex('idx_burrow_event_logs_channel', '{{%burrow_event_logs}}', ['channel'], false);
         }
 
+        if (!$this->db->tableExists('{{%burrow_outbox_elements}}')) {
+            $this->createTable('{{%burrow_outbox_elements}}', [
+                'id' => $this->primaryKey(),
+                'outboxId' => $this->char(32)->notNull(),
+                'eventKey' => $this->string()->notNull(),
+                'channel' => $this->string(),
+                'eventName' => $this->string(),
+                'outboxStatus' => $this->string(20)->notNull()->defaultValue('pending'),
+                'attemptCount' => $this->integer()->notNull()->defaultValue(0),
+                'maxAttempts' => $this->integer()->notNull()->defaultValue(1),
+                'lastError' => $this->text(),
+                'nextAttemptAt' => $this->dateTime(),
+                'sentAt' => $this->dateTime(),
+                'outboxCreatedAt' => $this->dateTime()->notNull(),
+                'outboxUpdatedAt' => $this->dateTime()->notNull(),
+            ]);
+            $this->createIndex('idx_burrow_outbox_elements_outbox', '{{%burrow_outbox_elements}}', ['outboxId'], true);
+            $this->createIndex('idx_burrow_outbox_elements_status', '{{%burrow_outbox_elements}}', ['outboxStatus'], false);
+            $this->createIndex('idx_burrow_outbox_elements_event_key', '{{%burrow_outbox_elements}}', ['eventKey'], false);
+            $this->createIndex('idx_burrow_outbox_elements_created', '{{%burrow_outbox_elements}}', ['outboxCreatedAt'], false);
+            $this->addForeignKey(
+                'fk_burrow_outbox_elements_id',
+                '{{%burrow_outbox_elements}}',
+                ['id'],
+                '{{%elements}}',
+                ['id'],
+                'CASCADE',
+                'CASCADE'
+            );
+        }
+
         return true;
     }
 
     public function safeDown(): bool
     {
+        $this->dropTableIfExists('{{%burrow_outbox_elements}}');
         $this->dropTableIfExists('{{%burrow_event_logs}}');
         $this->dropTableIfExists('{{%burrow_outbox_sent}}');
         $this->dropTableIfExists('{{%burrow_outbox}}');

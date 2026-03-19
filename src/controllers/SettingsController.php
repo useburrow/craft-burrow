@@ -91,9 +91,9 @@ class SettingsController extends Controller
                 if ($mode !== 'track') {
                     $detail = 'Off';
                 } elseif ($funnel) {
-                    $detail = 'Orders + Items + Funnel';
+                    $detail = 'Orders and line items + Funnel';
                 } else {
-                    $detail = 'Orders + Items';
+                    $detail = 'Orders and line items';
                 }
             }
             $integrationSummaryRows[] = [
@@ -158,6 +158,10 @@ class SettingsController extends Controller
         $formsContracts = $plugin->getIntegrations()->buildFormsContracts($state);
         $integrationSettings = is_array($state['integrationSettings'] ?? null) ? $state['integrationSettings'] : [];
         $backfillState = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
+        $operationsSettings = is_array($integrationSettings['operations'] ?? null) ? $integrationSettings['operations'] : [];
+        $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+        $outboxRetentionDays = (int)($operationsSettings['outboxRetentionDays'] ?? 30);
+        $outboxRetentionDays = max(1, min(365, $outboxRetentionDays));
         $availableSources = $plugin->getBackfill()->availableSources($state);
         $backfillSources = array_values(array_filter(array_map('strval', (array)($backfillState['sources'] ?? $availableSources))));
         $backfillPresets = $plugin->getBackfill()->presetOptions();
@@ -186,9 +190,9 @@ class SettingsController extends Controller
                 if ($mode !== 'track') {
                     $detail = 'Off';
                 } elseif ($funnel) {
-                    $detail = 'Orders + Items + Funnel';
+                    $detail = 'Orders and line items + Funnel';
                 } else {
-                    $detail = 'Orders + Items';
+                    $detail = 'Orders and line items';
                 }
             }
             $integrationSummaryRows[] = [
@@ -196,6 +200,24 @@ class SettingsController extends Controller
                 'detail' => $detail,
                 'iconDataUri' => (string)($availableIntegrations[$integrationKey]['iconDataUri'] ?? ''),
             ];
+        }
+        $selectedIntegrationNames = array_values(array_map(
+            static fn(string $key): string => (string)($integrationLabels[$key] ?? $key),
+            array_values(array_filter(array_map('strval', (array)($state['selectedIntegrations'] ?? []))))
+        ));
+        $projectUrl = trim((string)($state['burrowProject']['url'] ?? ''));
+        if ($projectUrl === '') {
+            $path = trim((string)($state['burrowProject']['path'] ?? ''));
+            if ($path !== '' && trim((string)$settings->baseUrl) !== '') {
+                $parts = parse_url((string)$settings->baseUrl);
+                if (is_array($parts) && !empty($parts['scheme']) && !empty($parts['host'])) {
+                    $host = (string)$parts['host'];
+                    if (str_starts_with($host, 'api.')) {
+                        $host = 'app.' . substr($host, 4);
+                    }
+                    $projectUrl = (string)$parts['scheme'] . '://' . $host . '/' . ltrim($path, '/');
+                }
+            }
         }
 
         return $this->renderTemplate('burrow/dashboard/index', [
@@ -205,13 +227,14 @@ class SettingsController extends Controller
             'logs' => $logs,
             'snapshot' => $snapshot,
             'integrationSummaryRows' => $integrationSummaryRows,
-            'contractRows' => array_values(array_map(static function (array $contract): array {
+            'contractRows' => array_values(array_map(static function (array $contract) use ($integrationLabels): array {
+                $providerKey = trim((string)($contract['provider'] ?? ''));
                 $mode = trim((string)($contract['mode'] ?? 'count_only'));
                 $modeLabel = $mode === 'custom_fields'
                     ? 'Custom fields'
                     : ($mode === 'off' ? 'Off' : 'Count-only');
                 return [
-                    'provider' => (string)($contract['provider'] ?? ''),
+                    'provider' => (string)($integrationLabels[$providerKey] ?? $providerKey),
                     'formName' => trim((string)($contract['formName'] ?? '')),
                     'externalFormId' => trim((string)($contract['externalFormId'] ?? '')),
                     'mode' => $modeLabel,
@@ -222,6 +245,31 @@ class SettingsController extends Controller
             'backfillSources' => $backfillSources,
             'availableBackfillSources' => $availableSources,
             'backfillPresets' => $backfillPresets,
+            'outboxRetentionDays' => $outboxRetentionDays,
+            'systemJobs' => $systemJobs,
+            'selectedIntegrationNames' => $selectedIntegrationNames,
+            'projectUrl' => $projectUrl,
+            'selectedSubnavItem' => 'dashboard',
+        ]);
+    }
+
+    public function actionBackfillProbe(): Response
+    {
+        $this->requirePermission('accessPlugin-burrow');
+
+        $plugin = Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        $windowPreset = trim((string)Craft::$app->getRequest()->getQueryParam('windowPreset', 'last_90_days'));
+        $presetOptions = $plugin->getBackfill()->presetOptions();
+        if (!isset($presetOptions[$windowPreset])) {
+            $windowPreset = 'last_90_days';
+        }
+        $probe = $plugin->getBackfill()->debugProbe($runtimeState, $windowPreset);
+
+        return $this->renderTemplate('burrow/debug/backfill-probe', [
+            'probe' => $probe,
+            'windowPreset' => $windowPreset,
+            'presetOptions' => $presetOptions,
             'selectedSubnavItem' => 'dashboard',
         ]);
     }
@@ -231,10 +279,38 @@ class SettingsController extends Controller
         $this->requirePermission('accessPlugin-burrow');
 
         $plugin = Plugin::getInstance();
+        $request = Craft::$app->getRequest();
+        $status = trim((string)$request->getQueryParam('status', 'all'));
+        $search = trim((string)$request->getQueryParam('q', ''));
+        $page = max(1, (int)$request->getQueryParam('page', 1));
+        $perPage = 50;
+        $allowed = ['all', 'pending', 'retrying', 'failed', 'sent'];
+        if (!in_array($status, $allowed, true)) {
+            $status = 'all';
+        }
+        $queryStatus = $status === 'all' ? '' : $status;
+        $totalRows = $plugin->getQueue()->countRecords($queryStatus, $search);
+        $totalPages = max(1, (int)ceil($totalRows / $perPage));
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+        $offset = ($page - 1) * $perPage;
+        $rows = $plugin->getQueue()->listRecords($queryStatus, $perPage, $offset, $search);
+        $start = $totalRows > 0 ? ($offset + 1) : 0;
+        $end = min($offset + count($rows), $totalRows);
+        $statusCounts = $plugin->getQueue()->stats();
 
         return $this->renderTemplate('burrow/outbox/index', [
-            'rows' => $plugin->getQueue()->listRecent(200),
-            'queueStats' => $plugin->getQueue()->stats(),
+            'rows' => $rows,
+            'queueStats' => $statusCounts,
+            'status' => $status,
+            'search' => $search,
+            'page' => $page,
+            'totalPages' => $totalPages,
+            'totalRows' => $totalRows,
+            'startRow' => $start,
+            'endRow' => $end,
+            'perPage' => $perPage,
             'selectedSubnavItem' => 'outbox',
         ]);
     }
@@ -244,16 +320,24 @@ class SettingsController extends Controller
         $this->requirePostRequest();
         $this->requirePermission('accessPlugin-burrow');
 
+        $status = trim((string)Craft::$app->getRequest()->getBodyParam('status', 'all'));
+        $q = trim((string)Craft::$app->getRequest()->getBodyParam('q', ''));
+        $page = max(1, (int)Craft::$app->getRequest()->getBodyParam('page', 1));
+        $query = ['status' => $status !== '' ? $status : 'all', 'page' => $page];
+        if ($q !== '') {
+            $query['q'] = $q;
+        }
+
         $id = (string)Craft::$app->getRequest()->getBodyParam('id', '');
         if ($id === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Invalid outbox id.'));
-            return $this->redirect('burrow/outbox');
+            return $this->redirect('burrow/outbox?' . http_build_query($query));
         }
 
         $ok = Plugin::getInstance()->getQueue()->retryNow($id);
         Craft::$app->getSession()->setNotice($ok ? Craft::t('burrow', 'Outbox record queued for retry.') : Craft::t('burrow', 'Unable to retry outbox record.'));
 
-        return $this->redirect('burrow/outbox');
+        return $this->redirect('burrow/outbox?' . http_build_query($query));
     }
 
     public function actionDeleteOutbox(): ?Response
@@ -261,16 +345,52 @@ class SettingsController extends Controller
         $this->requirePostRequest();
         $this->requirePermission('accessPlugin-burrow');
 
+        $status = trim((string)Craft::$app->getRequest()->getBodyParam('status', 'all'));
+        $q = trim((string)Craft::$app->getRequest()->getBodyParam('q', ''));
+        $page = max(1, (int)Craft::$app->getRequest()->getBodyParam('page', 1));
+        $query = ['status' => $status !== '' ? $status : 'all', 'page' => $page];
+        if ($q !== '') {
+            $query['q'] = $q;
+        }
+
         $id = (string)Craft::$app->getRequest()->getBodyParam('id', '');
         if ($id === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Invalid outbox id.'));
-            return $this->redirect('burrow/outbox');
+            return $this->redirect('burrow/outbox?' . http_build_query($query));
         }
 
         $ok = Plugin::getInstance()->getQueue()->deleteRecord($id);
         Craft::$app->getSession()->setNotice($ok ? Craft::t('burrow', 'Outbox record deleted.') : Craft::t('burrow', 'Unable to delete outbox record.'));
 
-        return $this->redirect('burrow/outbox');
+        return $this->redirect('burrow/outbox?' . http_build_query($query));
+    }
+
+    public function actionSaveOperationsSettings(): ?Response
+    {
+        $this->requirePostRequest();
+        $this->requirePermission('accessPlugin-burrow');
+
+        $plugin = Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $operations = is_array($integrationSettings['operations'] ?? null) ? $integrationSettings['operations'] : [];
+        $retention = (int)Craft::$app->getRequest()->getBodyParam('outboxRetentionDays', $operations['outboxRetentionDays'] ?? 30);
+        $retention = max(1, min(365, $retention));
+        $operations['outboxRetentionDays'] = $retention;
+        $integrationSettings['operations'] = $operations;
+        $runtimeState['integrationSettings'] = $integrationSettings;
+        $plugin->getState()->saveState($runtimeState);
+
+        $deleted = $plugin->getQueue()->cleanupSentAndFailed($retention);
+        $plugin->getLogs()->log('info', 'Operations settings updated', 'operations', 'system', null, [
+            'outboxRetentionDays' => $retention,
+            'deletedRecords' => $deleted,
+        ]);
+
+        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Outbox retention updated to {days} days.', [
+            'days' => (string)$retention,
+        ]));
+        return $this->redirect('burrow/dashboard#data-backfill');
     }
 
     public function actionSaveConnection(): ?Response
@@ -566,6 +686,9 @@ class SettingsController extends Controller
             $runtimeState['projectSourceId'] = $projectSourceId;
             $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
             $sourceIds['forms'] = $projectSourceId;
+            if (trim((string)($sourceIds['ecommerce'] ?? '')) === '') {
+                $sourceIds['ecommerce'] = $projectSourceId;
+            }
             if (trim((string)($sourceIds['system'] ?? '')) === '') {
                 $sourceIds['system'] = $projectSourceId;
             }
@@ -578,14 +701,41 @@ class SettingsController extends Controller
             'mappingCount' => is_array($result['contractMappings'] ?? null) ? count((array)$result['contractMappings']) : 0,
         ];
         $runtimeState['integrationSettings'] = $integrationSettings;
+        $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
+        $snapshotResult = $plugin->getBurrowApi()->publishSystemSnapshot(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            $runtimeState['lastSnapshot']
+        );
+        if ($snapshotResult['ok']) {
+            $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+            $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+            $systemJobs['snapshotLastRunAt'] = gmdate('c');
+            $systemJobs['snapshotQueuedAt'] = '';
+            $systemJobs['snapshotLastError'] = '';
+            $integrationSettings['systemJobs'] = $systemJobs;
+            $runtimeState['integrationSettings'] = $integrationSettings;
+        }
+        $runtimeState['onboardingCompleted'] = true;
         $runtimeState['onboardingStep'] = 'finish';
         $plugin->getState()->saveState($runtimeState);
         $plugin->getLogs()->log('info', 'Contracts synced to Burrow', 'onboarding', 'system', null, [
             'contractsVersion' => $integrationSettings['contractSync']['version'],
             'contractsCount' => count($contracts),
         ]);
+        if ($snapshotResult['ok']) {
+            $plugin->getLogs()->log('info', 'Snapshot published after contract sync', 'onboarding', 'system');
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Contracts synced to Burrow and system snapshot published.'));
+        } else {
+            $plugin->getLogs()->log('warning', 'Contracts synced but snapshot publish failed', 'onboarding', 'system', null, [
+                'error' => $snapshotResult['error'],
+            ]);
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Contracts synced to Burrow. Snapshot sync pending: {error}', [
+                'error' => $snapshotResult['error'],
+            ]));
+        }
 
-        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Contracts synced to Burrow.'));
         return $this->redirect('burrow/settings?step=finish');
     }
 
@@ -604,6 +754,15 @@ class SettingsController extends Controller
             $runtimeState,
             $runtimeState['lastSnapshot']
         );
+        if ($syncResult['ok']) {
+            $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+            $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+            $systemJobs['snapshotLastRunAt'] = gmdate('c');
+            $systemJobs['snapshotQueuedAt'] = '';
+            $systemJobs['snapshotLastError'] = '';
+            $integrationSettings['systemJobs'] = $systemJobs;
+            $runtimeState['integrationSettings'] = $integrationSettings;
+        }
         $runtimeState['onboardingCompleted'] = true;
         $runtimeState['onboardingStep'] = 'finish';
         $plugin->getState()->saveState($runtimeState);

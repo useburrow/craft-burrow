@@ -1,18 +1,55 @@
 {% extends "_layouts/cp" %}
 
 {% set title = "Burrow Outbox"|t('burrow') %}
+{% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'outbox' %}
 
 {% block content %}
+    {% set status = status ?? 'all' %}
+    {% set search = search ?? '' %}
+    {% set page = page ?? 1 %}
+    {% set totalPages = totalPages ?? 1 %}
+    {% set totalRows = totalRows ?? (rows|length) %}
+    {% set startRow = startRow ?? (totalRows ? 1 : 0) %}
+    {% set endRow = endRow ?? (rows|length) %}
+    {% set tabs = {
+        all: 'All',
+        pending: 'Pending',
+        retrying: 'Retrying',
+        failed: 'Failed',
+        sent: 'Sent'
+    } %}
+
     <p>
         <strong>Pending:</strong> {{ queueStats.pending }},
         <strong>Retrying:</strong> {{ queueStats.retrying }},
         <strong>Failed:</strong> {{ queueStats.failed }},
         <strong>Sent:</strong> {{ queueStats.sent }}
     </p>
+    <h2 class="tabs" style="margin: 10px 0 12px;">
+        {% for tabKey, tabLabel in tabs %}
+            <a
+                href="{{ cpUrl('burrow/outbox', { status: tabKey, q: search }) }}"
+                class="tab {{ status == tabKey ? 'sel' : '' }}"
+            >{{ tabLabel }}</a>
+        {% endfor %}
+    </h2>
+
+    <form method="get" action="{{ cpUrl('burrow/outbox') }}" style="display:flex; gap:8px; align-items:center; margin:0 0 10px;">
+        <input type="hidden" name="status" value="{{ status }}">
+        <input class="text" type="search" name="q" value="{{ search }}" placeholder="Search event key, channel, event name, or error" style="min-width:340px;">
+        <button class="btn">Search</button>
+        {% if search %}
+            <a class="btn" href="{{ cpUrl('burrow/outbox', { status: status }) }}">Clear</a>
+        {% endif %}
+    </form>
+
+    <p class="light">
+        Showing {{ startRow }}-{{ endRow }} of {{ totalRows }} records
+    </p>
 
     {% if rows is empty %}
-        <p>No outbox records.</p>
+        <p>{{ search or status != 'all' ? 'No outbox records found for this filter.' : 'No outbox records.' }}</p>
     {% else %}
         <table class="data fullwidth">
             <thead>
@@ -39,11 +76,17 @@
                         <form method="post" action="{{ actionUrl('burrow/settings/retry-outbox') }}" style="display:inline-block;">
                             {{ csrfInput() }}
                             <input type="hidden" name="id" value="{{ row.id }}">
+                            <input type="hidden" name="status" value="{{ status }}">
+                            <input type="hidden" name="q" value="{{ search }}">
+                            <input type="hidden" name="page" value="{{ page }}">
                             <button class="btn small">Retry</button>
                         </form>
                         <form method="post" action="{{ actionUrl('burrow/settings/delete-outbox') }}" style="display:inline-block;">
                             {{ csrfInput() }}
                             <input type="hidden" name="id" value="{{ row.id }}">
+                            <input type="hidden" name="status" value="{{ status }}">
+                            <input type="hidden" name="q" value="{{ search }}">
+                            <input type="hidden" name="page" value="{{ page }}">
                             <button class="btn small">Delete</button>
                         </form>
                     </td>
@@ -51,5 +94,16 @@
             {% endfor %}
             </tbody>
         </table>
+        {% if totalPages > 1 %}
+            <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+                {% if page > 1 %}
+                    <a class="btn" href="{{ cpUrl('burrow/outbox', { status: status, q: search, page: page - 1 }) }}">Previous</a>
+                {% endif %}
+                <span class="light">Page {{ page }} of {{ totalPages }}</span>
+                {% if page < totalPages %}
+                    <a class="btn" href="{{ cpUrl('burrow/outbox', { status: status, q: search, page: page + 1 }) }}">Next</a>
+                {% endif %}
+            </div>
+        {% endif %}
     {% endif %}
 {% endblock %}

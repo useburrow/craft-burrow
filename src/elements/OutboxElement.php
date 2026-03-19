@@ -99,9 +99,10 @@ class OutboxElement extends Element
     {
         return [
             'eventKey' => ['label' => 'Event Key'],
-            'channelEvent' => ['label' => 'Channel/Event'],
-            'status' => ['label' => 'Status'],
-            'attempts' => ['label' => 'Attempts'],
+            'channel' => ['label' => 'Channel'],
+            'eventName' => ['label' => 'Event'],
+            'outboxStatus' => ['label' => 'Status'],
+            'attemptCount' => ['label' => 'Attempts'],
             'lastError' => ['label' => 'Last Error'],
             'outboxCreatedAt' => ['label' => 'Created'],
             'outboxUpdatedAt' => ['label' => 'Updated'],
@@ -110,7 +111,7 @@ class OutboxElement extends Element
 
     protected static function defineDefaultTableAttributes(string $source): array
     {
-        return ['eventKey', 'channelEvent', 'status', 'attempts', 'lastError', 'outboxCreatedAt'];
+        return ['eventKey', 'channel', 'eventName', 'outboxStatus', 'attemptCount', 'lastError', 'outboxCreatedAt'];
     }
 
     protected static function defineSortOptions(): array
@@ -202,8 +203,13 @@ class OutboxElement extends Element
     protected function tableAttributeHtml(string $attribute): string
     {
         return match ($attribute) {
-            'channelEvent' => Html::encode($this->channel ?: '-') . ' / ' . Html::encode($this->eventName ?: '-'),
-            'attempts' => (string)$this->attemptCount . ' / ' . (string)$this->maxAttempts,
+            'attemptCount' => (string)$this->attemptCount . ' / ' . (string)$this->maxAttempts,
+            'outboxStatus' => Html::encode(ucfirst($this->outboxStatus ?: 'pending')),
+            'channel' => Html::encode($this->channel ?: '-'),
+            'eventName' => Html::encode($this->eventName ?: '-'),
+            'lastError' => Html::encode($this->lastError ?: '-'),
+            'outboxCreatedAt' => Html::encode($this->outboxCreatedAt ?: '-'),
+            'outboxUpdatedAt' => Html::encode($this->outboxUpdatedAt ?: '-'),
             default => parent::tableAttributeHtml($attribute),
         };
     }

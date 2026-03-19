@@ -261,6 +261,7 @@ class IntegrationsService extends Component
         }
 
         $freeformConfig = is_array($integrationSettings['freeform'] ?? null) ? $integrationSettings['freeform'] : [];
+        $freeformPrefix = strtoupper(trim((string)($freeformConfig['prefix'] ?? ''))) ?: 'FF';
         $freeformFormsConfig = is_array($freeformConfig['forms'] ?? null) ? $freeformConfig['forms'] : [];
         foreach ($freeformFormsConfig as $formId => $config) {
             if (!is_array($config)) {
@@ -295,9 +296,10 @@ class IntegrationsService extends Component
             $externalId = trim((string)($config['externalFormId'] ?? $formId));
             $formName = trim((string)($config['formName'] ?? ($known['name'] ?? ('Freeform ' . $formId))));
             $formHandle = trim((string)($known['handle'] ?? ''));
+            $prefixLower = strtolower($freeformPrefix) . '_';
             $contracts[] = [
                 'provider' => 'freeform',
-                'externalFormId' => str_starts_with($externalId, 'ff_') ? $externalId : ('ff_' . $externalId),
+                'externalFormId' => str_starts_with($externalId, $prefixLower) ? $externalId : ($prefixLower . $externalId),
                 'formHandle' => $formHandle !== '' ? $formHandle : ('freeform-' . $formId),
                 'formName' => $formName,
                 'enabled' => true,
@@ -309,17 +311,19 @@ class IntegrationsService extends Component
         }
 
         $formieConfig = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
+        $formiePrefix = strtoupper(trim((string)($formieConfig['prefix'] ?? ''))) ?: 'FRM';
         $formieMode = trim((string)($formieConfig['mode'] ?? 'off'));
         $normalizedFormieMode = $formieMode === 'custom_fields' ? 'count_only' : $formieMode;
         $formieIds = array_values(array_filter(array_map('strval', (array)($formieConfig['formIds'] ?? []))));
         if (in_array($normalizedFormieMode, ['count_only'], true)) {
+            $formiePrefixLower = strtolower($formiePrefix) . '_';
             foreach ($formieIds as $formId) {
                 $known = $formieForms[$formId] ?? null;
                 $formName = trim((string)($known['name'] ?? ('Formie ' . $formId)));
                 $formHandle = trim((string)($known['handle'] ?? ''));
                 $contracts[] = [
                     'provider' => 'formie',
-                    'externalFormId' => str_starts_with($formId, 'formie_') ? $formId : ('formie_' . $formId),
+                    'externalFormId' => str_starts_with($formId, $formiePrefixLower) ? $formId : ($formiePrefixLower . $formId),
                     'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
                     'formName' => $formName,
                     'enabled' => true,

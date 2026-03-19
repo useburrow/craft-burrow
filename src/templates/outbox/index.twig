@@ -4,3 +4,21 @@
 {% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'outbox' %}
 {% set elementType = 'burrow\\Burrow\\elements\\OutboxElement' %}
+
+{% block foot %}
+    {{ parent() }}
+    {% js %}
+        (function() {
+            var type = '{{ elementType|e("js") }}';
+            $('#main-content').on('click', '.element[data-type="' + type + '"]', function(ev) {
+                if (Garnish.isCtrlKeyPressed(ev) || ev.metaKey || ev.shiftKey) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                var id = $(this).data('id');
+                if (id) {
+                    Craft.createElementEditor(type, {elementId: id});
+                }
+            });
+        })();
+    {% endjs %}
+{% endblock %}

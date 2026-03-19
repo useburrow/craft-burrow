@@ -42,14 +42,16 @@ class FormTrackingService extends Component
         $timestamp = $this->normalizeTimestamp($this->objectDateValue($submission, ['dateCreated', 'dateUpdated'])) ?: gmdate('c');
         $submissionId = $this->objectStringValue($submission, ['id']);
         $config = $configByFormId[$formId];
+        $prefix = $this->resolveProviderPrefix($runtimeState, 'freeform', 'FF');
+        $prefixedFormId = $prefix . $formId;
 
         $tags = [
             'provider' => 'freeform',
-            'formId' => (string)$formId,
+            'formId' => $prefixedFormId,
         ];
         $properties = [
             'provider' => 'freeform',
-            'formId' => (string)$formId,
+            'formId' => $prefixedFormId,
             'formName' => (string)($config['formName'] ?? ('Form ' . $formId)),
             'submissionId' => $submissionId,
             'submittedAt' => $timestamp,
@@ -113,17 +115,19 @@ class FormTrackingService extends Component
         $timestamp = $this->normalizeTimestamp($this->objectDateValue($submission, ['dateCreated', 'dateUpdated'])) ?: gmdate('c');
         $submissionId = $this->objectStringValue($submission, ['id']);
         $formName = $this->extractSubmissionFormName($submission) ?: ('Formie ' . $formId);
+        $prefix = $this->resolveProviderPrefix($runtimeState, 'formie', 'FRM');
+        $prefixedFormId = $prefix . $formId;
 
         $eventEnvelope = $plugin->getBurrowApi()->buildFormsSubmissionEvent($runtimeState, [
             'timestamp' => $timestamp,
             'source' => 'craft-formie',
             'tags' => [
                 'provider' => 'formie',
-                'formId' => (string)$formId,
+                'formId' => $prefixedFormId,
             ],
             'properties' => [
                 'provider' => 'formie',
-                'formId' => (string)$formId,
+                'formId' => $prefixedFormId,
                 'formName' => $formName,
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
@@ -137,6 +141,14 @@ class FormTrackingService extends Component
             'formId' => (string)$formId,
             'submissionId' => $submissionId,
         ]);
+    }
+
+    private function resolveProviderPrefix(array $runtimeState, string $provider, string $default): string
+    {
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $providerConfig = is_array($integrationSettings[$provider] ?? null) ? $integrationSettings[$provider] : [];
+        $prefix = strtoupper(trim((string)($providerConfig['prefix'] ?? '')));
+        return $prefix !== '' ? $prefix : $default;
     }
 
     private function freeformConfigsByFormId(array $runtimeState): array

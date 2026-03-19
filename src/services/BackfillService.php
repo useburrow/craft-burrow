@@ -345,13 +345,14 @@ class BackfillService extends Component
                 continue;
             }
             $submissionId = $this->objectStringValue($row, ['id']);
+            $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'freeform', 'FF') . max(0, $formId);
             $baseTags = [
                 'provider' => 'freeform',
-                'formId' => (string)max(0, $formId),
+                'formId' => $prefixedFormId,
             ];
             $baseProperties = [
                 'provider' => 'freeform',
-                'formId' => (string)max(0, $formId),
+                'formId' => $prefixedFormId,
                 'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
@@ -459,9 +460,10 @@ class BackfillService extends Component
                 continue;
             }
             $submissionId = $this->objectStringValue($row, ['id']);
+            $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'formie', 'FRM') . max(0, $formId);
             $baseProperties = [
                 'provider' => 'formie',
-                'formId' => (string)max(0, $formId),
+                'formId' => $prefixedFormId,
                 'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
@@ -472,7 +474,7 @@ class BackfillService extends Component
                 'source' => 'craft-formie',
                 'tags' => [
                     'provider' => 'formie',
-                    'formId' => (string)max(0, $formId),
+                    'formId' => $prefixedFormId,
                 ],
                 'properties' => $baseProperties,
             ]);
@@ -765,6 +767,14 @@ class BackfillService extends Component
             ];
         }
         return $lineItems;
+    }
+
+    private function resolveProviderPrefix(array $runtimeState, string $provider, string $default): string
+    {
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $providerConfig = is_array($integrationSettings[$provider] ?? null) ? $integrationSettings[$provider] : [];
+        $prefix = strtoupper(trim((string)($providerConfig['prefix'] ?? '')));
+        return $prefix !== '' ? $prefix : $default;
     }
 
     private function extractSubmissionFormId(object $submission): int

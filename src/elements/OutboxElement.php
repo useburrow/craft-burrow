@@ -111,7 +111,7 @@ class OutboxElement extends Element
 
     protected static function defineDefaultTableAttributes(string $source): array
     {
-        return ['eventKey', 'channel', 'eventName', 'outboxStatus', 'attemptCount', 'lastError', 'outboxCreatedAt'];
+        return ['outboxStatus', 'attemptCount', 'lastError', 'outboxCreatedAt'];
     }
 
     protected static function defineSortOptions(): array
@@ -161,7 +161,7 @@ class OutboxElement extends Element
 
     public function getCpEditUrl(): ?string
     {
-        return UrlHelper::cpUrl('burrow/outbox');
+        return UrlHelper::cpUrl("burrow/outbox/{$this->id}");
     }
 
     public function getFieldLayout(): ?\craft\models\FieldLayout
@@ -169,18 +169,116 @@ class OutboxElement extends Element
         return null;
     }
 
+    public function canView(\craft\elements\User $user): bool
+    {
+        return $user->can('accessPlugin-burrow');
+    }
+
+    public function canSave(\craft\elements\User $user): bool
+    {
+        return false;
+    }
+
+    public function canDelete(\craft\elements\User $user): bool
+    {
+        return $user->can('accessPlugin-burrow');
+    }
+
+    public function prepareEditScreen(\yii\web\Response $response, string $containerId): void
+    {
+        /** @var \craft\web\CpScreenResponseBehavior $response */
+        $response->crumbs([
+            [
+                'label' => Craft::t('burrow', 'Burrow'),
+                'url' => UrlHelper::cpUrl('burrow'),
+            ],
+            [
+                'label' => Craft::t('burrow', 'Outbox'),
+                'url' => UrlHelper::cpUrl('burrow/outbox'),
+            ],
+        ]);
+    }
+
+    public function getPostEditUrl(): ?string
+    {
+        return UrlHelper::cpUrl('burrow/outbox');
+    }
+
     public function getUiLabel(): string
     {
-        $label = trim($this->eventKey);
-        if ($label !== '') {
-            return $label;
-        }
         $channel = trim($this->channel);
         $event = trim($this->eventName);
         if ($channel !== '' || $event !== '') {
             return ($channel ?: '-') . ' / ' . ($event ?: '-');
         }
-        return 'Outbox record #' . ($this->outboxId ?: $this->id);
+        $key = trim($this->eventKey);
+        if ($key !== '') {
+            return '...' . substr($key, -12);
+        }
+        return 'Outbox #' . ($this->outboxId ?: $this->id);
+    }
+
+    protected function metadata(): array
+    {
+        $meta = [
+            Craft::t('burrow', 'Channel') => $this->channel ?: '-',
+            Craft::t('burrow', 'Event') => $this->eventName ?: '-',
+            Craft::t('burrow', 'Status') => ucfirst($this->outboxStatus ?: 'pending'),
+            Craft::t('burrow', 'Attempts') => $this->attemptCount . ' / ' . $this->maxAttempts,
+        ];
+        if ($this->lastError) {
+            $meta[Craft::t('burrow', 'Last Error')] = $this->lastError;
+        }
+        if ($this->sentAt) {
+            $meta[Craft::t('burrow', 'Sent At')] = $this->sentAt;
+        }
+        $meta[Craft::t('burrow', 'Created')] = $this->outboxCreatedAt ?: '-';
+        $meta[Craft::t('burrow', 'Updated')] = $this->outboxUpdatedAt ?: '-';
+        $meta[Craft::t('burrow', 'Event Key')] = Html::tag('code', Html::encode($this->eventKey), ['style' => 'word-break:break-all; font-size:11px;']);
+        return $meta;
+    }
+
+    protected function metaFieldsHtml(bool $static): string
+    {
+        $html = parent::metaFieldsHtml($static);
+
+        $payload = $this->loadPayloadJson();
+        if ($payload !== null) {
+            $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $html .= Html::tag('div', 
+                Html::tag('h3', Craft::t('burrow', 'Payload'), ['class' => 'heading'])
+                . Html::tag('pre', Html::encode($json), [
+                    'style' => 'background:var(--gray-050); padding:10px; border-radius:4px; font-size:11px; line-height:1.4; overflow:auto; max-height:400px; white-space:pre-wrap; word-break:break-all; border:1px solid var(--hairline-color);',
+                ]),
+                ['style' => 'margin-top:14px;']
+            );
+        }
+
+        return $html;
+    }
+
+    private function loadPayloadJson(): mixed
+    {
+        if ($this->outboxId === '') {
+            return null;
+        }
+        try {
+            $row = Craft::$app->getDb()->createCommand(
+                'SELECT payload FROM {{%burrow_outbox}} WHERE id = :id LIMIT 1',
+                [':id' => $this->outboxId]
+            )->queryOne();
+            if (!is_array($row)) {
+                return null;
+            }
+            $raw = $row['payload'] ?? null;
+            if (is_string($raw)) {
+                $decoded = json_decode($raw, true);
+                return is_array($decoded) ? $decoded : $raw;
+            }
+            return $raw;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public static function searchableAttributes(): array
@@ -203,11 +301,12 @@ class OutboxElement extends Element
     protected function tableAttributeHtml(string $attribute): string
     {
         return match ($attribute) {
+            'eventKey' => Html::tag('code', Html::encode($this->eventKey !== '' ? ('...' . substr($this->eventKey, -12)) : '-'), ['style' => 'font-size:11px;']),
             'attemptCount' => (string)$this->attemptCount . ' / ' . (string)$this->maxAttempts,
             'outboxStatus' => Html::encode(ucfirst($this->outboxStatus ?: 'pending')),
             'channel' => Html::encode($this->channel ?: '-'),
             'eventName' => Html::encode($this->eventName ?: '-'),
-            'lastError' => Html::encode($this->lastError ?: '-'),
+            'lastError' => Html::encode($this->lastError !== null && $this->lastError !== '' ? (mb_strlen($this->lastError) > 60 ? mb_substr($this->lastError, 0, 60) . '...' : $this->lastError) : '-'),
             'outboxCreatedAt' => Html::encode($this->outboxCreatedAt ?: '-'),
             'outboxUpdatedAt' => Html::encode($this->outboxUpdatedAt ?: '-'),
             default => parent::tableAttributeHtml($attribute),

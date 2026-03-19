@@ -183,6 +183,15 @@
             <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
                 {{ csrfInput() }}
                 <input type="hidden" name="integration" value="freeform">
+                {{ forms.textField({
+                    label: 'Provider prefix',
+                    instructions: 'Short prefix prepended to form IDs in events (e.g. FF1). Prevents ID collisions across form plugins.',
+                    id: 'freeformPrefix',
+                    name: 'freeformPrefix',
+                    value: freeformConfig.prefix ?? 'FF',
+                    size: 6,
+                    maxlength: 10,
+                }) }}
                 {% if integrationStepData.freeformForms is empty %}
                     <p class="burrow-muted">No Freeform forms were found.</p>
                 {% else %}
@@ -363,6 +372,15 @@
             <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
                 {{ csrfInput() }}
                 <input type="hidden" name="integration" value="formie">
+                {{ forms.textField({
+                    label: 'Provider prefix',
+                    instructions: 'Short prefix prepended to form IDs in events (e.g. FRM1). Prevents ID collisions across form plugins.',
+                    id: 'formiePrefix',
+                    name: 'formiePrefix',
+                    value: formieConfig.prefix ?? 'FRM',
+                    size: 6,
+                    maxlength: 10,
+                }) }}
                 <fieldset>
                     <legend><strong>Tracking mode</strong></legend>
                     {{ forms.radio({

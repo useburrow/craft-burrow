@@ -563,7 +563,12 @@ class SettingsController extends Controller
                     'fields' => $normalizedFields,
                 ];
             }
+            $freeformPrefix = strtoupper(trim((string)Craft::$app->getRequest()->getBodyParam('freeformPrefix', 'FF')));
+            if ($freeformPrefix === '') {
+                $freeformPrefix = 'FF';
+            }
             $integrationSettings['freeform'] = [
+                'prefix' => $freeformPrefix,
                 'forms' => $normalizedForms,
             ];
         } elseif ($integration === 'formie') {
@@ -573,7 +578,12 @@ class SettingsController extends Controller
             if (!in_array($mode, ['off', 'count_only'], true)) {
                 $mode = 'count_only';
             }
+            $formiePrefix = strtoupper(trim((string)Craft::$app->getRequest()->getBodyParam('formiePrefix', 'FRM')));
+            if ($formiePrefix === '') {
+                $formiePrefix = 'FRM';
+            }
             $integrationSettings['formie'] = [
+                'prefix' => $formiePrefix,
                 'mode' => $mode,
                 'formIds' => $selectedForms,
             ];

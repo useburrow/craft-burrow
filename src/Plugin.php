@@ -92,6 +92,7 @@ class Plugin extends CraftPlugin
                     'burrow/dashboard' => 'burrow/settings/dashboard',
                     'burrow/backfill-probe' => 'burrow/settings/backfill-probe',
                     'burrow/outbox' => 'burrow/settings/outbox',
+                    'burrow/outbox/<elementId:\d+>' => 'elements/edit',
                     'burrow/settings/outbox' => 'burrow/settings/outbox',
                     'burrow/settings' => 'burrow/settings/index',
                 ]);

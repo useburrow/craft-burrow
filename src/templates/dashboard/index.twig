@@ -1,8 +1,11 @@
 {% extends "_layouts/cp" %}
 
-{% set title = "Burrow Dashboard"|t('burrow') %}
+{% set title = "Dashboard"|t('burrow') %}
 {% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'dashboard' %}
+{% set crumbs = [
+    { label: 'Burrow'|t('burrow'), url: cpUrl('burrow') },
+] %}
 
 {% block content %}
     <style>

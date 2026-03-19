@@ -1,9 +1,12 @@
 {% extends "_layouts/elementindex.twig" %}
 
-{% set title = "Burrow Outbox"|t('burrow') %}
+{% set title = "Outbox"|t('burrow') %}
 {% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'outbox' %}
 {% set elementType = 'burrow\\Burrow\\elements\\OutboxElement' %}
+{% set crumbs = [
+    { label: 'Burrow'|t('burrow'), url: cpUrl('burrow') },
+] %}
 
 {% block foot %}
     {{ parent() }}

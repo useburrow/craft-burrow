@@ -3,6 +3,10 @@
 {% set title = "Backfill Probe"|t('burrow') %}
 {% set selectedNavItem = 'burrow' %}
 {% set selectedSubnavItem = selectedSubnavItem ?? 'dashboard' %}
+{% set crumbs = [
+    { label: 'Burrow'|t('burrow'), url: cpUrl('burrow') },
+    { label: 'Dashboard'|t('burrow'), url: cpUrl('burrow/dashboard') },
+] %}
 
 {% block content %}
     <h2>Backfill Probe</h2>

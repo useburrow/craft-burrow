@@ -5,6 +5,7 @@ use burrow\Burrow\services\BurrowApiService;
 use burrow\Burrow\services\BackfillService;
 use burrow\Burrow\services\CommerceTrackingService;
 use burrow\Burrow\services\EventLogService;
+use burrow\Burrow\services\FormTrackingService;
 use burrow\Burrow\services\IntegrationsService;
 use burrow\Burrow\services\QueueService;
 use burrow\Burrow\services\StateService;
@@ -18,6 +19,7 @@ trait PluginTrait
             'burrowApi' => BurrowApiService::class,
             'backfill' => BackfillService::class,
             'commerceTracking' => CommerceTrackingService::class,
+            'formTracking' => FormTrackingService::class,
             'integrations' => IntegrationsService::class,
             'logs' => EventLogService::class,
             'queue' => QueueService::class,
@@ -44,6 +46,11 @@ trait PluginTrait
     public function getCommerceTracking(): CommerceTrackingService
     {
         return $this->get('commerceTracking');
+    }
+
+    public function getFormTracking(): FormTrackingService
+    {
+        return $this->get('formTracking');
     }
 
     public function getLogs(): EventLogService

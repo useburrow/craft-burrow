@@ -35,6 +35,7 @@ class Plugin extends CraftPlugin
         $this->_registerPostInstallRedirect();
         $this->_setPluginComponents();
         $this->_registerCommerceHooks();
+        $this->_registerFormHooks();
         $this->_scheduleSystemJobs();
 
         Craft::info(
@@ -185,6 +186,49 @@ class Plugin extends CraftPlugin
                     } catch (\Throwable $e) {
                         $this->getLogs()->log('warning', 'Commerce order event dispatch failed', 'commerce', 'ecommerce', null, [
                             'handler' => $handler,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            );
+        }
+    }
+
+    private function _registerFormHooks(): void
+    {
+        $freeformServiceClass = '\Solspace\Freeform\Services\SubmissionsService';
+        $freeformEventConst = $freeformServiceClass . '::EVENT_AFTER_SUBMIT';
+        if (class_exists($freeformServiceClass) && defined($freeformEventConst)) {
+            /** @var string $eventName */
+            $eventName = constant($freeformEventConst);
+            Event::on(
+                $freeformServiceClass,
+                $eventName,
+                function (\yii\base\Event $event): void {
+                    try {
+                        $this->getFormTracking()->handleFreeformSubmissionEvent($event);
+                    } catch (\Throwable $e) {
+                        $this->getLogs()->log('warning', 'Freeform submission event dispatch failed', 'freeform', 'forms', null, [
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            );
+        }
+
+        $formieServiceClass = '\verbb\formie\services\Submissions';
+        $formieEventConst = $formieServiceClass . '::EVENT_AFTER_SUBMISSION';
+        if (class_exists($formieServiceClass) && defined($formieEventConst)) {
+            /** @var string $eventName */
+            $eventName = constant($formieEventConst);
+            Event::on(
+                $formieServiceClass,
+                $eventName,
+                function (\yii\base\Event $event): void {
+                    try {
+                        $this->getFormTracking()->handleFormieSubmissionEvent($event);
+                    } catch (\Throwable $e) {
+                        $this->getLogs()->log('warning', 'Formie submission event dispatch failed', 'formie', 'forms', null, [
                             'error' => $e->getMessage(),
                         ]);
                     }

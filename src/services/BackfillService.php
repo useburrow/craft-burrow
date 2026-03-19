@@ -51,7 +51,11 @@ class BackfillService extends Component
                 . ', ecommerce=' . (string)($debug['ecommerceEvents'] ?? 0)
                 . ', projectId=' . ((bool)($debug['projectIdPresent'] ?? false) ? 'yes' : 'no')
                 . ', formsSource=' . ((bool)($debug['formsSourcePresent'] ?? false) ? 'yes' : 'no')
-                . ', ecommerceSource=' . ((bool)($debug['ecommerceSourcePresent'] ?? false) ? 'yes' : 'no');
+                . ', ecommerceSource=' . ((bool)($debug['ecommerceSourcePresent'] ?? false) ? 'yes' : 'no')
+                . ', commerceSelected=' . ((bool)($debug['commerceSelected'] ?? false) ? 'yes' : 'no')
+                . ', commerceMode=' . (string)($debug['commerceMode'] ?? 'unknown')
+                . ', commerceScanned=' . (string)($debug['commerceScanned'] ?? 0)
+                . ', commerceInWindow=' . (string)($debug['commerceInWindow'] ?? 0);
             return $this->errorResult('No historical events found for the selected window and sources. [' . $summary . ']');
         }
 
@@ -478,36 +482,18 @@ class BackfillService extends Component
      */
     private function buildEcommerceEvents(array $runtimeState, string $windowStart): array
     {
-        $commerceConfig = is_array($runtimeState['integrationSettings']['commerce'] ?? null)
-            ? $runtimeState['integrationSettings']['commerce']
-            : [];
-        if ((string)($commerceConfig['mode'] ?? 'track') !== 'track') {
-            return [];
-        }
         $orderClass = '\craft\commerce\elements\Order';
         if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
             return [];
         }
 
         $windowStartTs = strtotime($windowStart) ?: 0;
-        $windowStartSql = gmdate('Y-m-d H:i:s', $windowStartTs);
 
         try {
             $query = $orderClass::find()
                 ->status(null)
                 ->site('*')
                 ->orderBy(['dateCreated' => SORT_DESC]);
-            if (method_exists($query, 'dateOrdered')) {
-                $query->dateOrdered('>= ' . $windowStartSql);
-            } elseif (method_exists($query, 'datePaid')) {
-                $query->datePaid('>= ' . $windowStartSql);
-            } elseif (method_exists($query, 'dateCreated')) {
-                $query->dateCreated('>= ' . $windowStartSql);
-            }
-            if (method_exists($query, 'isCompleted')) {
-                // Native Commerce query constraint: excludes carts/drafts without plugin-side heuristics.
-                $query->isCompleted(true);
-            }
             $orders = $query->limit(null)->all();
         } catch (\Throwable) {
             return [];
@@ -540,6 +526,9 @@ class BackfillService extends Component
             $items = $this->extractCommerceLineItemsFromOrderElement($order);
             $orderTotal = $this->extractCommerceOrderTotal($order);
             $itemCount = count($items);
+            if ($itemCount <= 0) {
+                $itemCount = max(0, (int)round($this->objectFloatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+            }
             $shippingMethod = $this->extractCommerceShippingMethod($order);
             $tags = ['provider' => 'craft-commerce'];
             if ($orderReference !== '') {
@@ -560,6 +549,8 @@ class BackfillService extends Component
                 'submittedAt' => $submittedAt,
                 'timestamp' => $submittedAt,
                 'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
+                'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
+                'externalEntityId' => 'craft_order_' . $orderId,
                 'tags' => $tags,
                 'items' => $items,
             ]);
@@ -1124,19 +1115,8 @@ class BackfillService extends Component
         if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
             return ['available' => false, 'scanned' => 0, 'inWindow' => 0, 'samples' => []];
         }
-        $windowStartSql = gmdate('Y-m-d H:i:s', $windowStartTs);
         try {
             $query = $orderClass::find()->status(null)->site('*')->orderBy(['dateCreated' => SORT_DESC]);
-            if (method_exists($query, 'dateOrdered')) {
-                $query->dateOrdered('>= ' . $windowStartSql);
-            } elseif (method_exists($query, 'datePaid')) {
-                $query->datePaid('>= ' . $windowStartSql);
-            } elseif (method_exists($query, 'dateCreated')) {
-                $query->dateCreated('>= ' . $windowStartSql);
-            }
-            if (method_exists($query, 'isCompleted')) {
-                $query->isCompleted(true);
-            }
             $orders = $query->limit(200)->all();
         } catch (\Throwable $e) {
             return ['available' => true, 'error' => $e->getMessage(), 'scanned' => 0, 'inWindow' => 0, 'samples' => []];
@@ -1215,6 +1195,11 @@ class BackfillService extends Component
     private function buildDiscoveryDebug(array $runtimeState, array $sources, string $windowStart): array
     {
         $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $commerceSettings = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
+        $selected = array_values(array_filter(array_map('strval', (array)($runtimeState['selectedIntegrations'] ?? []))));
+        $windowStartTs = strtotime($windowStart) ?: 0;
+        $commerceProbe = $this->probeCommerceOrders($windowStartTs);
         $formsEvents = 0;
         $ecommerceEvents = 0;
         if (in_array('forms', $sources, true)) {
@@ -1225,10 +1210,14 @@ class BackfillService extends Component
         }
         return [
             'sources' => $sources,
-            'selectedIntegrations' => array_values(array_filter(array_map('strval', (array)($runtimeState['selectedIntegrations'] ?? [])))),
+            'selectedIntegrations' => $selected,
             'projectIdPresent' => trim((string)($runtimeState['projectId'] ?? '')) !== '',
             'formsSourcePresent' => trim((string)($sourceIds['forms'] ?? $runtimeState['projectSourceId'] ?? '')) !== '',
             'ecommerceSourcePresent' => trim((string)($sourceIds['ecommerce'] ?? $sourceIds['forms'] ?? $runtimeState['projectSourceId'] ?? '')) !== '',
+            'commerceSelected' => in_array('commerce', $selected, true),
+            'commerceMode' => trim((string)($commerceSettings['mode'] ?? 'track')),
+            'commerceScanned' => (int)($commerceProbe['scanned'] ?? 0),
+            'commerceInWindow' => (int)($commerceProbe['inWindow'] ?? 0),
             'formsEvents' => $formsEvents,
             'ecommerceEvents' => $ecommerceEvents,
         ];

@@ -35,6 +35,10 @@ class CommerceTrackingService extends Component
 
         $lineItems = $this->extractLineItems($order);
         $orderTotal = $this->extractOrderTotal($order);
+        $itemCount = count($lineItems);
+        if ($itemCount <= 0) {
+            $itemCount = max(0, (int)round($this->floatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+        }
         $shippingMethod = $this->extractShippingMethod($order);
         $tags = ['provider' => 'craft-commerce'];
         if ($orderReference !== '') {
@@ -50,10 +54,12 @@ class CommerceTrackingService extends Component
             'orderId' => $orderId,
             'orderTotal' => $orderTotal,
             'currency' => $currency,
-            'itemCount' => count($lineItems),
+            'itemCount' => $itemCount,
             'submittedAt' => $submittedAt,
             'timestamp' => $submittedAt,
             'subtotal' => $this->floatValue($order, ['itemSubtotal', 'subtotal']),
+            'tax' => $this->floatValue($order, ['totalTax', 'taxTotal']),
+            'externalEntityId' => 'craft_order_' . $orderId,
             'tags' => $tags,
             'items' => $lineItems,
         ]);

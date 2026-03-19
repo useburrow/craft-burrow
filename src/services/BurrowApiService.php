@@ -436,7 +436,9 @@ class BurrowApiService extends Component
     {
         $projectId = trim((string)($runtimeState['projectId'] ?? ''));
         $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
-        if ($projectId === '' || $ecommerceSourceId === '') {
+        $organizationId = trim((string)($runtimeState['organizationId'] ?? ''));
+        $clientId = $this->resolveClientId($runtimeState);
+        if ($projectId === '' || $ecommerceSourceId === '' || $organizationId === '' || $clientId === '') {
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
                 'Ecommerce envelope build skipped: missing routing context',
@@ -446,6 +448,8 @@ class BurrowApiService extends Component
                 [
                     'projectIdPresent' => $projectId !== '',
                     'ecommerceSourcePresent' => $ecommerceSourceId !== '',
+                    'organizationIdPresent' => $organizationId !== '',
+                    'clientIdPresent' => $clientId !== '',
                 ]
             );
             return [];
@@ -480,17 +484,26 @@ class BurrowApiService extends Component
             $currency = 'USD';
         }
         $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        if (!isset($tags['currency']) || trim((string)$tags['currency']) === '') {
+            $tags['currency'] = $currency;
+        }
         $events = [];
+        $externalEntityId = trim((string)($payload['externalEntityId'] ?? ('craft_order_' . $orderId)));
 
         try {
             $events[] = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceOrderPlacedEvent([
+                'organizationId' => $organizationId,
+                'clientId' => $clientId,
                 'orderId' => $orderId,
                 'orderTotal' => (float)($payload['orderTotal'] ?? 0),
+                'total' => (float)($payload['orderTotal'] ?? 0),
                 'currency' => $currency,
                 'itemCount' => (int)($payload['itemCount'] ?? 0),
                 'submittedAt' => $submittedAt,
                 'subtotal' => (float)($payload['subtotal'] ?? 0),
+                'tax' => (float)($payload['tax'] ?? 0),
                 'timestamp' => trim((string)($payload['timestamp'] ?? $submittedAt)),
+                'externalEntityId' => $externalEntityId,
                 'tags' => $tags,
             ], $routing);
         } catch (\Throwable $e) {
@@ -519,6 +532,8 @@ class BurrowApiService extends Component
             }
             try {
                 $events[] = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceItemPurchasedEvent([
+                    'organizationId' => $organizationId,
+                    'clientId' => $clientId,
                     'orderId' => $orderId,
                     'productId' => trim((string)($item['productId'] ?? '')),
                     'productName' => trim((string)($item['productName'] ?? 'Item')),
@@ -619,10 +634,25 @@ class BurrowApiService extends Component
         $state = new \Burrow\Sdk\Events\ChannelRoutingState(
             projectId: (string)($runtimeState['projectId'] ?? ''),
             projectSourceIds: $channelSources,
-            clientId: (string)($runtimeState['clientId'] ?? '')
+            clientId: $this->resolveClientId($runtimeState)
         );
 
         return new \Burrow\Sdk\Events\ChannelRoutingResolver($state);
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     */
+    private function resolveClientId(array $runtimeState): string
+    {
+        $runtimeClientId = trim((string)($runtimeState['clientId'] ?? ''));
+        if ($runtimeClientId !== '') {
+            return $runtimeClientId;
+        }
+        $sdk = \Burrow\Sdk\Client\BurrowClientState::fromArray(
+            is_array($runtimeState['sdkState'] ?? null) ? $runtimeState['sdkState'] : []
+        );
+        return trim((string)($sdk->clientId ?? ''));
     }
 
     /**

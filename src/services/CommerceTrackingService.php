@@ -48,20 +48,11 @@ class CommerceTrackingService extends Component
         if (empty($eventEnvelope)) {
             return;
         }
-
-        $settings = $plugin->getSettings();
-        $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
-            $runtimeState,
-            [$eventEnvelope]
-        );
-        if (!$result['ok']) {
-            $plugin->getLogs()->log('warning', 'Commerce cart.added publish failed', 'commerce', 'ecommerce', null, [
-                'productId' => $productId,
-                'error' => $result['error'],
-            ]);
-        }
+        $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, [
+            'type' => 'cart_added',
+            'orderId' => $this->extractOrderIdentifier($order),
+            'productId' => $productId,
+        ]);
     }
 
     public function handleCartLineItemRemovedEvent(Event $event): void
@@ -106,20 +97,11 @@ class CommerceTrackingService extends Component
         if (empty($eventEnvelope)) {
             return;
         }
-
-        $settings = $plugin->getSettings();
-        $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
-            $runtimeState,
-            [$eventEnvelope]
-        );
-        if (!$result['ok']) {
-            $plugin->getLogs()->log('warning', 'Commerce cart.removed publish failed', 'commerce', 'ecommerce', null, [
-                'productId' => $productId,
-                'error' => $result['error'],
-            ]);
-        }
+        $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, [
+            'type' => 'cart_removed',
+            'orderId' => $this->extractOrderIdentifier($order),
+            'productId' => $productId,
+        ]);
     }
 
     public function handleCompletedOrderEvent(Event $event): void
@@ -187,17 +169,26 @@ class CommerceTrackingService extends Component
             return;
         }
 
-        $settings = $plugin->getSettings();
-        $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
-            $runtimeState,
-            $events
-        );
+        $published = 0;
+        $failed = 0;
+        foreach ($events as $singleEvent) {
+            if (!is_array($singleEvent)) {
+                continue;
+            }
+            $ok = $this->publishAndTrackRealtimeEvent($singleEvent, $runtimeState, [
+                'type' => 'order_completed',
+                'orderId' => $orderId,
+            ]);
+            if ($ok) {
+                $published++;
+            } else {
+                $failed++;
+            }
+        }
 
         $plugin->getLogs()->log(
-            $result['ok'] ? 'info' : 'warning',
-            $result['ok'] ? 'Commerce order events published' : 'Commerce order events publish failed',
+            $failed === 0 ? 'info' : 'warning',
+            $failed === 0 ? 'Commerce order events published' : 'Commerce order events publish failed',
             'commerce',
             'ecommerce',
             null,
@@ -206,10 +197,9 @@ class CommerceTrackingService extends Component
                 'orderReference' => $orderReference,
                 'orderLookupNumber' => $orderLookupNumber,
                 'shippingMethod' => $shippingMethod,
-                'requested' => $result['requestedCount'],
-                'published' => $result['publishedCount'],
-                'failed' => $result['failedCount'],
-                'error' => $result['error'],
+                'requested' => count($events),
+                'published' => $published,
+                'failed' => $failed,
             ]
         );
     }
@@ -424,5 +414,85 @@ class CommerceTrackingService extends Component
         }
 
         return '';
+    }
+
+    /**
+     * @param array<string,mixed> $eventEnvelope
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $identity
+     */
+    private function publishAndTrackRealtimeEvent(array $eventEnvelope, array $runtimeState, array $identity): bool
+    {
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $eventKey = $this->buildRealtimeEventKey($eventEnvelope, $identity);
+        if ($plugin->getQueue()->wasSent($eventKey)) {
+            return true;
+        }
+
+        $settings = $plugin->getSettings();
+        $result = $plugin->getBurrowApi()->publishEvents(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            [$eventEnvelope]
+        );
+
+        $channel = trim((string)($eventEnvelope['channel'] ?? ''));
+        $eventName = trim((string)($eventEnvelope['event'] ?? ''));
+        if ($result['ok']) {
+            $plugin->getQueue()->markSent($eventKey, $eventEnvelope, $channel, $eventName);
+            return true;
+        }
+
+        $error = trim((string)($result['error'] ?? 'Realtime publish failed.'));
+        $plugin->getQueue()->markFailed($eventKey, $eventEnvelope, $error, $channel, $eventName);
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $eventEnvelope
+     * @param array<string,mixed> $identity
+     */
+    private function buildRealtimeEventKey(array $eventEnvelope, array $identity): string
+    {
+        $seed = [
+            'channel' => trim((string)($eventEnvelope['channel'] ?? '')),
+            'event' => trim((string)($eventEnvelope['event'] ?? '')),
+            'timestamp' => trim((string)($eventEnvelope['timestamp'] ?? '')),
+            'source' => trim((string)($eventEnvelope['source'] ?? '')),
+            'identity' => $identity,
+            'tags' => is_array($eventEnvelope['tags'] ?? null) ? $eventEnvelope['tags'] : [],
+            'properties' => is_array($eventEnvelope['properties'] ?? null) ? $eventEnvelope['properties'] : [],
+        ];
+        return 'rt_' . hash('sha256', $this->stableJsonEncode($seed));
+    }
+
+    /**
+     * @param array<string,mixed> $value
+     */
+    private function stableJsonEncode(array $value): string
+    {
+        $normalized = $this->normalizeForStableHash($value);
+        $encoded = json_encode($normalized, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return is_string($encoded) ? $encoded : '';
+    }
+
+    private function normalizeForStableHash(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            $normalized = [];
+            foreach ($value as $item) {
+                $normalized[] = $this->normalizeForStableHash($item);
+            }
+            return $normalized;
+        }
+        ksort($value);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->normalizeForStableHash($item);
+        }
+        return $value;
     }
 }

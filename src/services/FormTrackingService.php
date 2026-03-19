@@ -80,21 +80,10 @@ class FormTrackingService extends Component
         if ($eventEnvelope === []) {
             return;
         }
-
-        $settings = $plugin->getSettings();
-        $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
-            $runtimeState,
-            [$eventEnvelope]
-        );
-        if (!$result['ok']) {
-            $plugin->getLogs()->log('warning', 'Freeform realtime publish failed', 'freeform', 'forms', null, [
-                'formId' => (string)$formId,
-                'submissionId' => $submissionId,
-                'error' => (string)$result['error'],
-            ]);
-        }
+        $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, 'freeform', [
+            'formId' => (string)$formId,
+            'submissionId' => $submissionId,
+        ]);
     }
 
     public function handleFormieSubmissionEvent(Event $event): void
@@ -144,21 +133,10 @@ class FormTrackingService extends Component
         if ($eventEnvelope === []) {
             return;
         }
-
-        $settings = $plugin->getSettings();
-        $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
-            $runtimeState,
-            [$eventEnvelope]
-        );
-        if (!$result['ok']) {
-            $plugin->getLogs()->log('warning', 'Formie realtime publish failed', 'formie', 'forms', null, [
-                'formId' => (string)$formId,
-                'submissionId' => $submissionId,
-                'error' => (string)$result['error'],
-            ]);
-        }
+        $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, 'formie', [
+            'formId' => (string)$formId,
+            'submissionId' => $submissionId,
+        ]);
     }
 
     private function freeformConfigsByFormId(array $runtimeState): array
@@ -473,5 +451,93 @@ class FormTrackingService extends Component
             return trim((string)$value);
         }
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $eventEnvelope
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $identity
+     */
+    private function publishAndTrackRealtimeEvent(array $eventEnvelope, array $runtimeState, string $provider, array $identity): void
+    {
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $eventKey = $this->buildRealtimeEventKey($eventEnvelope, $provider, $identity);
+        if ($plugin->getQueue()->wasSent($eventKey)) {
+            return;
+        }
+
+        $settings = $plugin->getSettings();
+        $result = $plugin->getBurrowApi()->publishEvents(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            [$eventEnvelope]
+        );
+
+        $channel = trim((string)($eventEnvelope['channel'] ?? ''));
+        $eventName = trim((string)($eventEnvelope['event'] ?? ''));
+        if ($result['ok']) {
+            $plugin->getQueue()->markSent($eventKey, $eventEnvelope, $channel, $eventName);
+            return;
+        }
+
+        $error = trim((string)($result['error'] ?? 'Realtime publish failed.'));
+        $plugin->getQueue()->markFailed($eventKey, $eventEnvelope, $error, $channel, $eventName);
+        $plugin->getLogs()->log('warning', ucfirst($provider) . ' realtime publish failed', $provider, 'forms', $eventKey, [
+            'error' => $error,
+            'event' => $eventName,
+            'channel' => $channel,
+        ] + $identity);
+    }
+
+    /**
+     * @param array<string,mixed> $eventEnvelope
+     * @param array<string,mixed> $identity
+     */
+    private function buildRealtimeEventKey(array $eventEnvelope, string $provider, array $identity): string
+    {
+        $seed = [
+            'provider' => $provider,
+            'channel' => trim((string)($eventEnvelope['channel'] ?? '')),
+            'event' => trim((string)($eventEnvelope['event'] ?? '')),
+            'timestamp' => trim((string)($eventEnvelope['timestamp'] ?? '')),
+            'source' => trim((string)($eventEnvelope['source'] ?? '')),
+            'identity' => $identity,
+            'tags' => is_array($eventEnvelope['tags'] ?? null) ? $eventEnvelope['tags'] : [],
+            'properties' => is_array($eventEnvelope['properties'] ?? null) ? $eventEnvelope['properties'] : [],
+        ];
+
+        return 'rt_' . hash('sha256', $this->stableJsonEncode($seed));
+    }
+
+    /**
+     * @param array<string,mixed> $value
+     */
+    private function stableJsonEncode(array $value): string
+    {
+        $normalized = $this->normalizeForStableHash($value);
+        $encoded = json_encode($normalized, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return is_string($encoded) ? $encoded : '';
+    }
+
+    private function normalizeForStableHash(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if (array_is_list($value)) {
+            $normalized = [];
+            foreach ($value as $item) {
+                $normalized[] = $this->normalizeForStableHash($item);
+            }
+            return $normalized;
+        }
+
+        ksort($value);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->normalizeForStableHash($item);
+        }
+        return $value;
     }
 }

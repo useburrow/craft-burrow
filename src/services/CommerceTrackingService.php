@@ -6,11 +6,19 @@ use yii\base\Event;
 
 class CommerceTrackingService extends Component
 {
+    /** @var array<string,bool> Order IDs that had a line item removed during this request */
+    private array $ordersWithRemovalInFlight = [];
+
     public function handleCartLineItemAddedEvent(Event $event): void
     {
         $order = is_object($event->sender ?? null) ? $event->sender : null;
         $lineItem = is_object($event->lineItem ?? null) ? $event->lineItem : null;
         if ($order === null || $lineItem === null) {
+            return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        if ($orderId !== '' && isset($this->ordersWithRemovalInFlight[$orderId])) {
             return;
         }
 
@@ -61,6 +69,11 @@ class CommerceTrackingService extends Component
         $lineItem = is_object($event->lineItem ?? null) ? $event->lineItem : null;
         if ($order === null || $lineItem === null) {
             return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        if ($orderId !== '') {
+            $this->ordersWithRemovalInFlight[$orderId] = true;
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();

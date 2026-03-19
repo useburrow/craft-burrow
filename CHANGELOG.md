@@ -4,6 +4,17 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.2.0] - 2026-03-19
+
+### Added
+
+- Ecommerce funnel event: `ecommerce.cart.abandoned` — queue job scans for idle Commerce carts past a configurable threshold (default 120 min), emitted as a lifecycle event with deduplication on `externalEntityId`.
+- Ecommerce funnel event: `ecommerce.payment.failed` — hooks Commerce `EVENT_AFTER_PROCESS_PAYMENT` for unsuccessful transactions with gateway-provided failure reasons.
+- Ecommerce funnel event: `ecommerce.checkout.started` — detects checkout initiation when an email is first populated on an incomplete order with line items, deduped per cart.
+- Ecommerce funnel event: `ecommerce.cart.recovered` — emitted at order completion when a prior cart or checkout abandonment signal exists for the customer.
+- Four new envelope builders in `BurrowApiService` with SDK canonical builder pass-through and manual fallback.
+- `DetectAbandonedCartsJob` scheduled alongside existing system jobs (30-minute cadence), gated by `ecommerce_funnel` capability.
+
 ## [5.1.0] - 2026-03-19
 
 ### Added

@@ -310,8 +310,9 @@ class IntegrationsService extends Component
 
         $formieConfig = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
         $formieMode = trim((string)($formieConfig['mode'] ?? 'off'));
+        $normalizedFormieMode = $formieMode === 'custom_fields' ? 'count_only' : $formieMode;
         $formieIds = array_values(array_filter(array_map('strval', (array)($formieConfig['formIds'] ?? []))));
-        if (in_array($formieMode, ['count_only', 'custom_fields'], true)) {
+        if (in_array($normalizedFormieMode, ['count_only'], true)) {
             foreach ($formieIds as $formId) {
                 $known = $formieForms[$formId] ?? null;
                 $formName = trim((string)($known['name'] ?? ('Formie ' . $formId)));
@@ -322,8 +323,8 @@ class IntegrationsService extends Component
                     'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
                     'formName' => $formName,
                     'enabled' => true,
-                    'countOnly' => $formieMode !== 'custom_fields',
-                    'mode' => $formieMode,
+                    'countOnly' => true,
+                    'mode' => $normalizedFormieMode,
                     'fieldMappings' => [],
                     'icon' => null,
                 ];

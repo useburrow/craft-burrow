@@ -602,7 +602,7 @@ class SettingsController extends Controller
             $selectedForms = (array)Craft::$app->getRequest()->getBodyParam('formieFormIds', []);
             $selectedForms = array_values(array_filter(array_map('strval', $selectedForms)));
             $mode = trim((string)Craft::$app->getRequest()->getBodyParam('formieMode', 'count_only'));
-            if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true)) {
+            if (!in_array($mode, ['off', 'count_only'], true)) {
                 $mode = 'count_only';
             }
             $integrationSettings['formie'] = [

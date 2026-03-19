@@ -313,6 +313,7 @@ class BackfillService extends Component
             }
             $enabledFormIds = array_values(array_unique($enabledFormIds));
         }
+        $enabledFormIdMap = array_fill_keys($enabledFormIds, true);
         $windowStartTs = strtotime($windowStart) ?: 0;
         try {
             $rows = $submissionClass::find()
@@ -332,6 +333,9 @@ class BackfillService extends Component
                 continue;
             }
             $formId = $this->extractSubmissionFormId($row);
+            if ($formId <= 0 || !isset($enabledFormIdMap[$formId])) {
+                continue;
+            }
             $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
             if ($timestamp === '') {
                 continue;
@@ -353,13 +357,13 @@ class BackfillService extends Component
                 'submittedAt' => $timestamp,
                 'isBackfill' => true,
             ];
-            $submissionPayload = $this->extractSubmissionScalarValues($row);
-            if (!empty($submissionPayload)) {
-                $baseProperties = array_merge($submissionPayload, $baseProperties);
-            }
             $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
             $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
             if ($mode === 'custom_fields') {
+                $submissionPayload = $this->extractSubmissionScalarValues($row);
+                if (!empty($submissionPayload)) {
+                    $baseProperties = array_merge($submissionPayload, $baseProperties);
+                }
                 $mapped = $this->extractMappedSubmissionPayload($row, is_array($formConfig['fields'] ?? null) ? $formConfig['fields'] : []);
                 if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
                     $baseTags = array_merge($baseTags, $mapped['tags']);
@@ -394,6 +398,10 @@ class BackfillService extends Component
         $mode = trim((string)($config['mode'] ?? 'count_only'));
         if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
             return [];
+        }
+        if ($mode === 'custom_fields') {
+            // Formie custom field mapping is not implemented yet; treat as count-only.
+            $mode = 'count_only';
         }
         $submissionClass = '\verbb\formie\elements\Submission';
         if (!class_exists($submissionClass) || !method_exists($submissionClass, 'find')) {
@@ -430,6 +438,7 @@ class BackfillService extends Component
         if (empty($selectedFormIds)) {
             return [];
         }
+        $selectedFormIdMap = array_fill_keys($selectedFormIds, true);
 
         $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
         $events = [];
@@ -438,6 +447,9 @@ class BackfillService extends Component
                 continue;
             }
             $formId = $this->extractSubmissionFormId($row);
+            if ($formId <= 0 || !isset($selectedFormIdMap[$formId])) {
+                continue;
+            }
             $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
             if ($timestamp === '') {
                 continue;
@@ -455,10 +467,6 @@ class BackfillService extends Component
                 'submittedAt' => $timestamp,
                 'isBackfill' => true,
             ];
-            $submissionPayload = $this->extractSubmissionScalarValues($row);
-            if (!empty($submissionPayload)) {
-                $baseProperties = array_merge($submissionPayload, $baseProperties);
-            }
             $event = $api->buildFormsSubmissionEvent($runtimeState, [
                 'timestamp' => $timestamp,
                 'source' => 'craft-formie',

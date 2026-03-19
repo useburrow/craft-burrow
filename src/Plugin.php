@@ -158,26 +158,39 @@ class Plugin extends CraftPlugin
     private function _registerCommerceHooks(): void
     {
         $orderClass = '\craft\commerce\elements\Order';
-        $eventConst = $orderClass . '::EVENT_AFTER_COMPLETE_ORDER';
-        if (!class_exists($orderClass) || !defined($eventConst)) {
+        if (!class_exists($orderClass)) {
             return;
         }
 
-        /** @var string $eventName */
-        $eventName = constant($eventConst);
-        Event::on(
-            $orderClass,
-            $eventName,
-            function (\yii\base\Event $event): void {
-                try {
-                    $this->getCommerceTracking()->handleCompletedOrderEvent($event);
-                } catch (\Throwable $e) {
-                    $this->getLogs()->log('warning', 'Commerce order event dispatch failed', 'commerce', 'ecommerce', null, [
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+        $hookMap = [
+            // Prefer payment/authorization completion hooks for confirmed orders.
+            'EVENT_AFTER_ORDER_PAID' => 'handleCompletedOrderEvent',
+            'EVENT_AFTER_ORDER_AUTHORIZED' => 'handleCompletedOrderEvent',
+            'EVENT_AFTER_ADD_LINE_ITEM' => 'handleCartLineItemAddedEvent',
+            'EVENT_AFTER_REMOVE_LINE_ITEM' => 'handleCartLineItemRemovedEvent',
+        ];
+        foreach ($hookMap as $eventConstant => $handler) {
+            $eventConst = $orderClass . '::' . $eventConstant;
+            if (!defined($eventConst)) {
+                continue;
             }
-        );
+            /** @var string $eventName */
+            $eventName = constant($eventConst);
+            Event::on(
+                $orderClass,
+                $eventName,
+                function (\yii\base\Event $event) use ($handler): void {
+                    try {
+                        $this->getCommerceTracking()->{$handler}($event);
+                    } catch (\Throwable $e) {
+                        $this->getLogs()->log('warning', 'Commerce order event dispatch failed', 'commerce', 'ecommerce', null, [
+                            'handler' => $handler,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            );
+        }
     }
 
     private function _scheduleSystemJobs(): void

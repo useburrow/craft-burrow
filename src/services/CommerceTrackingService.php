@@ -6,6 +6,122 @@ use yii\base\Event;
 
 class CommerceTrackingService extends Component
 {
+    public function handleCartLineItemAddedEvent(Event $event): void
+    {
+        $order = is_object($event->sender ?? null) ? $event->sender : null;
+        $lineItem = is_object($event->lineItem ?? null) ? $event->lineItem : null;
+        if ($order === null || $lineItem === null) {
+            return;
+        }
+
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+            return;
+        }
+
+        $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $productId = $this->stringValue($lineItem, ['purchasableId', 'id']);
+        $productName = $this->stringValue($lineItem, ['description', 'sku']) ?: 'Item';
+        $cartItemCount = max(0, (int)round($this->floatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+        if ($cartItemCount <= 0 && method_exists($order, 'getLineItems')) {
+            $cartItemCount = count((array)$order->getLineItems());
+        }
+        $eventEnvelope = $plugin->getBurrowApi()->buildEcommerceCartItemAddedEvent($runtimeState, [
+            'productId' => $productId,
+            'productName' => $productName,
+            'variantName' => $this->stringValue($lineItem, ['optionsSignature', 'sku', 'description']) ?: $productName,
+            'quantity' => $this->floatValue($lineItem, ['qty', 'quantity']),
+            'unitPrice' => $this->floatValue($lineItem, ['salePrice', 'price']),
+            'lineTotal' => $this->floatValue($lineItem, ['subtotal', 'total']),
+            'currency' => $currency,
+            'cartTotal' => $this->floatValue($order, ['totalPrice', 'total']),
+            'cartItemCount' => $cartItemCount,
+            'timestamp' => $this->dateValue($order, ['dateUpdated', 'dateCreated']) ?: gmdate('c'),
+            'tags' => [
+                'provider' => 'craft-commerce',
+            ],
+        ]);
+        if (empty($eventEnvelope)) {
+            return;
+        }
+
+        $settings = $plugin->getSettings();
+        $result = $plugin->getBurrowApi()->publishEvents(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            [$eventEnvelope]
+        );
+        if (!$result['ok']) {
+            $plugin->getLogs()->log('warning', 'Commerce cart.added publish failed', 'commerce', 'ecommerce', null, [
+                'productId' => $productId,
+                'error' => $result['error'],
+            ]);
+        }
+    }
+
+    public function handleCartLineItemRemovedEvent(Event $event): void
+    {
+        $order = is_object($event->sender ?? null) ? $event->sender : null;
+        $lineItem = is_object($event->lineItem ?? null) ? $event->lineItem : null;
+        if ($order === null || $lineItem === null) {
+            return;
+        }
+
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+            return;
+        }
+
+        $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $productId = $this->stringValue($lineItem, ['purchasableId', 'id']);
+        $productName = $this->stringValue($lineItem, ['description', 'sku']) ?: 'Item';
+        $cartItemCount = max(0, (int)round($this->floatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+        if ($cartItemCount <= 0 && method_exists($order, 'getLineItems')) {
+            $cartItemCount = count((array)$order->getLineItems());
+        }
+        $eventEnvelope = $plugin->getBurrowApi()->buildEcommerceCartItemRemovedEvent($runtimeState, [
+            'productId' => $productId,
+            'productName' => $productName,
+            'variantName' => $this->stringValue($lineItem, ['optionsSignature', 'sku', 'description']) ?: $productName,
+            'quantity' => $this->floatValue($lineItem, ['qty', 'quantity']),
+            'unitPrice' => $this->floatValue($lineItem, ['salePrice', 'price']),
+            'lineTotal' => $this->floatValue($lineItem, ['subtotal', 'total']),
+            'currency' => $currency,
+            'cartTotal' => $this->floatValue($order, ['totalPrice', 'total']),
+            'cartItemCount' => $cartItemCount,
+            'timestamp' => $this->dateValue($order, ['dateUpdated', 'dateCreated']) ?: gmdate('c'),
+            'tags' => [
+                'provider' => 'craft-commerce',
+            ],
+        ]);
+        if (empty($eventEnvelope)) {
+            return;
+        }
+
+        $settings = $plugin->getSettings();
+        $result = $plugin->getBurrowApi()->publishEvents(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            [$eventEnvelope]
+        );
+        if (!$result['ok']) {
+            $plugin->getLogs()->log('warning', 'Commerce cart.removed publish failed', 'commerce', 'ecommerce', null, [
+                'productId' => $productId,
+                'error' => $result['error'],
+            ]);
+        }
+    }
+
     public function handleCompletedOrderEvent(Event $event): void
     {
         $order = is_object($event->sender ?? null) ? $event->sender : null;
@@ -145,6 +261,20 @@ class CommerceTrackingService extends Component
             : [];
 
         return (string)($commerceConfig['mode'] ?? 'off') === 'track';
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     */
+    private function isCommerceFunnelEnabled(array $runtimeState): bool
+    {
+        if (!$this->isCommerceTrackingEnabled($runtimeState)) {
+            return false;
+        }
+        $commerceConfig = is_array($runtimeState['integrationSettings']['commerce'] ?? null)
+            ? $runtimeState['integrationSettings']['commerce']
+            : [];
+        return !empty($commerceConfig['ecommerceFunnel']);
     }
 
     /**

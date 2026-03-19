@@ -567,6 +567,142 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Build ecommerce cart item added envelope using SDK canonical builder.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceCartItemAddedEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        $organizationId = trim((string)($runtimeState['organizationId'] ?? ''));
+        $clientId = $this->resolveClientId($runtimeState);
+        if ($projectId === '' || $ecommerceSourceId === '' || $organizationId === '' || $clientId === '') {
+            return [];
+        }
+
+        $routing = $this->buildRoutingResolver($runtimeState);
+        $currency = trim((string)($payload['currency'] ?? ''));
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        if (!isset($tags['currency']) || trim((string)$tags['currency']) === '') {
+            $tags['currency'] = $currency;
+        }
+
+        try {
+            return \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceCartItemAddedEvent([
+                'organizationId' => $organizationId,
+                'clientId' => $clientId,
+                'productId' => trim((string)($payload['productId'] ?? '')),
+                'productName' => trim((string)($payload['productName'] ?? 'Item')),
+                'variantName' => trim((string)($payload['variantName'] ?? $payload['productName'] ?? 'Item')),
+                'quantity' => (float)($payload['quantity'] ?? 1),
+                'unitPrice' => (float)($payload['unitPrice'] ?? 0),
+                'lineTotal' => (float)($payload['lineTotal'] ?? 0),
+                'currency' => $currency,
+                'cartTotal' => (float)($payload['cartTotal'] ?? 0),
+                'cartItemCount' => (int)($payload['cartItemCount'] ?? 0),
+                'timestamp' => trim((string)($payload['timestamp'] ?? gmdate('c'))),
+                'tags' => $tags,
+            ], $routing);
+        } catch (\Throwable $e) {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce cart.added envelope build failed in SDK boundary',
+                'sdk',
+                'ecommerce',
+                null,
+                [
+                    'productId' => trim((string)($payload['productId'] ?? '')),
+                    'productName' => trim((string)($payload['productName'] ?? '')),
+                    'error' => $e->getMessage(),
+                ]
+            );
+            return [];
+        }
+    }
+
+    /**
+     * Build ecommerce cart item removed envelope using SDK canonical builder.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceCartItemRemovedEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        $organizationId = trim((string)($runtimeState['organizationId'] ?? ''));
+        $clientId = $this->resolveClientId($runtimeState);
+        if ($projectId === '' || $ecommerceSourceId === '' || $organizationId === '' || $clientId === '') {
+            return [];
+        }
+
+        $routing = $this->buildRoutingResolver($runtimeState);
+        $currency = trim((string)($payload['currency'] ?? ''));
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        if (!isset($tags['currency']) || trim((string)$tags['currency']) === '') {
+            $tags['currency'] = $currency;
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = 'buildEcommerceCartItemRemovedEvent';
+        if (!method_exists($builderClass, $builderMethod)) {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'SDK does not expose ecommerce cart.removed canonical builder',
+                'sdk',
+                'ecommerce',
+                null,
+                [
+                    'builder' => $builderClass . '::' . $builderMethod,
+                ]
+            );
+            return [];
+        }
+
+        try {
+            return $builderClass::{$builderMethod}([
+                'organizationId' => $organizationId,
+                'clientId' => $clientId,
+                'productId' => trim((string)($payload['productId'] ?? '')),
+                'productName' => trim((string)($payload['productName'] ?? 'Item')),
+                'variantName' => trim((string)($payload['variantName'] ?? $payload['productName'] ?? 'Item')),
+                'quantity' => (float)($payload['quantity'] ?? 1),
+                'unitPrice' => (float)($payload['unitPrice'] ?? 0),
+                'lineTotal' => (float)($payload['lineTotal'] ?? 0),
+                'currency' => $currency,
+                'cartTotal' => (float)($payload['cartTotal'] ?? 0),
+                'cartItemCount' => (int)($payload['cartItemCount'] ?? 0),
+                'timestamp' => trim((string)($payload['timestamp'] ?? gmdate('c'))),
+                'tags' => $tags,
+            ], $routing);
+        } catch (\Throwable $e) {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce cart.removed envelope build failed in SDK boundary',
+                'sdk',
+                'ecommerce',
+                null,
+                [
+                    'productId' => trim((string)($payload['productId'] ?? '')),
+                    'productName' => trim((string)($payload['productName'] ?? '')),
+                    'error' => $e->getMessage(),
+                ]
+            );
+            return [];
+        }
+    }
+
+    /**
      * @param array<int,array<string,mixed>> $formsContracts
      */
     private function buildFormsContractPayload(array $runtimeState, array $formsContracts): array

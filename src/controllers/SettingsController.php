@@ -278,39 +278,7 @@ class SettingsController extends Controller
     {
         $this->requirePermission('accessPlugin-burrow');
 
-        $plugin = Plugin::getInstance();
-        $request = Craft::$app->getRequest();
-        $status = trim((string)$request->getQueryParam('status', 'all'));
-        $search = trim((string)$request->getQueryParam('q', ''));
-        $page = max(1, (int)$request->getQueryParam('page', 1));
-        $perPage = 50;
-        $allowed = ['all', 'pending', 'retrying', 'failed', 'sent'];
-        if (!in_array($status, $allowed, true)) {
-            $status = 'all';
-        }
-        $queryStatus = $status === 'all' ? '' : $status;
-        $totalRows = $plugin->getQueue()->countRecords($queryStatus, $search);
-        $totalPages = max(1, (int)ceil($totalRows / $perPage));
-        if ($page > $totalPages) {
-            $page = $totalPages;
-        }
-        $offset = ($page - 1) * $perPage;
-        $rows = $plugin->getQueue()->listRecords($queryStatus, $perPage, $offset, $search);
-        $start = $totalRows > 0 ? ($offset + 1) : 0;
-        $end = min($offset + count($rows), $totalRows);
-        $statusCounts = $plugin->getQueue()->stats();
-
         return $this->renderTemplate('burrow/outbox/index', [
-            'rows' => $rows,
-            'queueStats' => $statusCounts,
-            'status' => $status,
-            'search' => $search,
-            'page' => $page,
-            'totalPages' => $totalPages,
-            'totalRows' => $totalRows,
-            'startRow' => $start,
-            'endRow' => $end,
-            'perPage' => $perPage,
             'selectedSubnavItem' => 'outbox',
         ]);
     }

@@ -20,6 +20,15 @@ class OutboxElementQuery extends ElementQuery
         return $this;
     }
 
+    protected function statusCondition(string $status): mixed
+    {
+        if (in_array($status, ['pending', 'retrying', 'failed', 'sent'], true)) {
+            return ['burrow_outbox_elements.outboxStatus' => $status];
+        }
+
+        return parent::statusCondition($status);
+    }
+
     protected function beforePrepare(): bool
     {
         $this->joinElementTable('{{%burrow_outbox_elements}}');
@@ -46,8 +55,6 @@ class OutboxElementQuery extends ElementQuery
         if ($this->outboxStatus !== null && $this->outboxStatus !== '') {
             $this->subQuery->andWhere(['burrow_outbox_elements.outboxStatus' => $this->outboxStatus]);
         }
-
-        $this->subQuery->andWhere($this->statusCondition('burrow_outbox_elements.outboxStatus'));
 
         return parent::beforePrepare();
     }

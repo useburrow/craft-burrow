@@ -5,13 +5,16 @@ use Craft;
 use yii\base\Event;
 
 use burrow\Burrow\base\PluginTrait;
+use burrow\Burrow\elements\OutboxElement;
 use burrow\Burrow\models\Settings;
 
 use craft\base\Model;
 use craft\base\Plugin as CraftPlugin;
 use craft\events\PluginEvent;
+use craft\events\RegisterComponentTypesEvent;
 use craft\events\RegisterUrlRulesEvent;
 use craft\helpers\UrlHelper;
+use craft\services\Elements;
 use craft\services\Plugins;
 use craft\web\UrlManager;
 
@@ -34,6 +37,7 @@ class Plugin extends CraftPlugin
         $this->_registerRoutes();
         $this->_registerPostInstallRedirect();
         $this->_setPluginComponents();
+        $this->_registerElementTypes();
         $this->_registerCommerceHooks();
         $this->_registerFormHooks();
         $this->_scheduleSystemJobs();
@@ -154,6 +158,17 @@ class Plugin extends CraftPlugin
         $session->remove('burrow.postInstallRedirectPending');
         Craft::$app->getResponse()->redirect(UrlHelper::cpUrl('burrow'));
         Craft::$app->end();
+    }
+
+    private function _registerElementTypes(): void
+    {
+        Event::on(
+            Elements::class,
+            Elements::EVENT_REGISTER_ELEMENT_TYPES,
+            static function (RegisterComponentTypesEvent $event): void {
+                $event->types[] = OutboxElement::class;
+            }
+        );
     }
 
     private function _registerCommerceHooks(): void

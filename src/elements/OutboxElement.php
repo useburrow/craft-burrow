@@ -168,6 +168,20 @@ class OutboxElement extends Element
         return null;
     }
 
+    public function getUiLabel(): string
+    {
+        $label = trim($this->eventKey);
+        if ($label !== '') {
+            return $label;
+        }
+        $channel = trim($this->channel);
+        $event = trim($this->eventName);
+        if ($channel !== '' || $event !== '') {
+            return ($channel ?: '-') . ' / ' . ($event ?: '-');
+        }
+        return 'Outbox record #' . ($this->outboxId ?: $this->id);
+    }
+
     public static function searchableAttributes(): array
     {
         return ['eventKey', 'channel', 'eventName', 'lastError', 'outboxStatus'];

@@ -121,6 +121,20 @@ class BurrowApiService extends Component
                 $routing['sourceIds']
             );
         }
+        $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
+        $fallbackSource = trim((string)($runtimeState['projectSourceId'] ?? $sourceIds['forms'] ?? ''));
+        if ($fallbackSource !== '') {
+            if (trim((string)($sourceIds['forms'] ?? '')) === '') {
+                $sourceIds['forms'] = $fallbackSource;
+            }
+            if (trim((string)($sourceIds['ecommerce'] ?? '')) === '') {
+                $sourceIds['ecommerce'] = (string)($sourceIds['forms'] ?? $fallbackSource);
+            }
+            if (trim((string)($sourceIds['system'] ?? '')) === '') {
+                $sourceIds['system'] = $fallbackSource;
+            }
+            $runtimeState['sourceIds'] = $sourceIds;
+        }
 
         $runtimeState['ingestionKey'] = [
             'key' => (string)($ingestionKey['key'] ?? ''),
@@ -164,6 +178,38 @@ class BurrowApiService extends Component
                     'cmsVersion' => (string)($snapshot['cms']['version'] ?? ''),
                 ],
             ], $resolver);
+            $event['source'] = 'craft-plugin';
+            $client->publishEvent($event);
+
+            return ['ok' => true, 'error' => ''];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * @return array{ok:bool,error:string}
+     */
+    public function publishSystemHeartbeat(string $baseUrl, string $apiKey, array $runtimeState, float $responseMs = 0.0): array
+    {
+        try {
+            $client = $this->createClient(
+                $baseUrl,
+                $apiKey,
+                $runtimeState['sdkState'] ?? [],
+                $runtimeState['ingestionKey'] ?? [],
+                true,
+                false
+            );
+            $resolver = $this->buildRoutingResolver($runtimeState);
+            $event = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildSystemHeartbeatEvent([
+                'organizationId' => (string)($runtimeState['organizationId'] ?? ''),
+                'responseMs' => max(0.0, $responseMs),
+                'tags' => [
+                    'provider' => 'craft-plugin',
+                ],
+            ], $resolver);
+            $event['source'] = 'craft-plugin';
             $client->publishEvent($event);
 
             return ['ok' => true, 'error' => ''];
@@ -289,6 +335,223 @@ class BurrowApiService extends Component
     }
 
     /**
+     * @param array<int,array<string,mixed>> $events
+     * @return array{ok:bool,error:string,requestedCount:int,publishedCount:int,failedCount:int}
+     */
+    public function publishEvents(
+        string $baseUrl,
+        string $apiKey,
+        array $runtimeState,
+        array $events
+    ): array {
+        $requested = count($events);
+        if ($requested === 0) {
+            return [
+                'ok' => true,
+                'error' => '',
+                'requestedCount' => 0,
+                'publishedCount' => 0,
+                'failedCount' => 0,
+            ];
+        }
+
+        try {
+            $client = $this->createClient(
+                $baseUrl,
+                $apiKey,
+                $runtimeState['sdkState'] ?? [],
+                $runtimeState['ingestionKey'] ?? [],
+                true,
+                false
+            );
+
+            $published = 0;
+            foreach ($events as $event) {
+                if (!is_array($event) || empty($event['event']) || empty($event['channel'])) {
+                    continue;
+                }
+                try {
+                    $client->publishEvent($event);
+                    $published++;
+                } catch (\Throwable) {
+                    // Best-effort publish: continue with remaining events.
+                    continue;
+                }
+            }
+
+            return [
+                'ok' => $published > 0,
+                'error' => $published > 0 ? '' : 'All event publishes failed.',
+                'requestedCount' => $requested,
+                'publishedCount' => $published,
+                'failedCount' => max(0, $requested - $published),
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'ok' => false,
+                'error' => $e->getMessage(),
+                'requestedCount' => $requested,
+                'publishedCount' => 0,
+                'failedCount' => $requested,
+            ];
+        }
+    }
+
+    /**
+     * Build a forms submission envelope from plugin runtime state.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildFormsSubmissionEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $projectSourceId = $this->resolveChannelSourceId($runtimeState, 'forms');
+        $timestamp = trim((string)($payload['timestamp'] ?? $payload['submittedAt'] ?? ''));
+        if ($projectId === '' || $projectSourceId === '' || $timestamp === '') {
+            return [];
+        }
+
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $projectSourceId,
+            'channel' => 'forms',
+            'event' => 'forms.submission.received',
+            'timestamp' => $timestamp,
+            'source' => trim((string)($payload['source'] ?? 'craft-plugin')),
+            'tags' => is_array($payload['tags'] ?? null) ? $payload['tags'] : [],
+            'properties' => is_array($payload['properties'] ?? null) ? $payload['properties'] : [],
+        ];
+    }
+
+    /**
+     * Build ecommerce order + line item envelopes using SDK canonical builders.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<int,array<string,mixed>>
+     */
+    public function buildEcommerceOrderAndItemEvents(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce envelope build skipped: missing routing context',
+                'sdk',
+                'ecommerce',
+                null,
+                [
+                    'projectIdPresent' => $projectId !== '',
+                    'ecommerceSourcePresent' => $ecommerceSourceId !== '',
+                ]
+            );
+            return [];
+        }
+
+        $orderId = trim((string)($payload['orderId'] ?? ''));
+        if ($orderId === '') {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce envelope build skipped: missing order id',
+                'sdk',
+                'ecommerce'
+            );
+            return [];
+        }
+        $submittedAt = trim((string)($payload['submittedAt'] ?? $payload['timestamp'] ?? ''));
+        if ($submittedAt === '') {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce envelope build skipped: missing submitted timestamp',
+                'sdk',
+                'ecommerce',
+                null,
+                ['orderId' => $orderId]
+            );
+            return [];
+        }
+
+        $routing = $this->buildRoutingResolver($runtimeState);
+        $currency = trim((string)($payload['currency'] ?? ''));
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        $events = [];
+
+        try {
+            $events[] = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceOrderPlacedEvent([
+                'orderId' => $orderId,
+                'orderTotal' => (float)($payload['orderTotal'] ?? 0),
+                'currency' => $currency,
+                'itemCount' => (int)($payload['itemCount'] ?? 0),
+                'submittedAt' => $submittedAt,
+                'subtotal' => (float)($payload['subtotal'] ?? 0),
+                'timestamp' => trim((string)($payload['timestamp'] ?? $submittedAt)),
+                'tags' => $tags,
+            ], $routing);
+        } catch (\Throwable $e) {
+            \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                'warning',
+                'Ecommerce order envelope build failed in SDK boundary',
+                'sdk',
+                'ecommerce',
+                null,
+                [
+                    'orderId' => $orderId,
+                    'submittedAt' => $submittedAt,
+                    'currency' => $currency,
+                    'itemCount' => (int)($payload['itemCount'] ?? 0),
+                    'orderTotal' => (float)($payload['orderTotal'] ?? 0),
+                    'error' => $e->getMessage(),
+                ]
+            );
+            return [];
+        }
+
+        $items = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            try {
+                $events[] = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceItemPurchasedEvent([
+                    'orderId' => $orderId,
+                    'productId' => trim((string)($item['productId'] ?? '')),
+                    'productName' => trim((string)($item['productName'] ?? 'Item')),
+                    'quantity' => (float)($item['quantity'] ?? 1),
+                    'unitPrice' => (float)($item['unitPrice'] ?? 0),
+                    'lineTotal' => (float)($item['lineTotal'] ?? 0),
+                    'currency' => $currency,
+                    'submittedAt' => $submittedAt,
+                    'timestamp' => trim((string)($payload['timestamp'] ?? $submittedAt)),
+                    'tags' => $tags,
+                ], $routing);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce line-item envelope build failed in SDK boundary',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    [
+                        'orderId' => $orderId,
+                        'productId' => trim((string)($item['productId'] ?? '')),
+                        'productName' => trim((string)($item['productName'] ?? 'Item')),
+                        'error' => $e->getMessage(),
+                    ]
+                );
+                continue;
+            }
+        }
+
+        return $events;
+    }
+
+    /**
      * @param array<int,array<string,mixed>> $formsContracts
      */
     private function buildFormsContractPayload(array $runtimeState, array $formsContracts): array
@@ -348,13 +611,9 @@ class BurrowApiService extends Component
 
     private function buildRoutingResolver(array $runtimeState): \Burrow\Sdk\Events\ChannelRoutingResolver
     {
-        $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
-        $fallback = (string)($runtimeState['projectSourceId'] ?? '');
-
         $channelSources = [];
         foreach (['forms', 'ecommerce', 'system'] as $channel) {
-            $value = trim((string)($sourceIds[$channel] ?? ''));
-            $channelSources[$channel] = $value !== '' ? $value : $fallback;
+            $channelSources[$channel] = $this->resolveChannelSourceId($runtimeState, $channel);
         }
 
         $state = new \Burrow\Sdk\Events\ChannelRoutingState(
@@ -364,6 +623,25 @@ class BurrowApiService extends Component
         );
 
         return new \Burrow\Sdk\Events\ChannelRoutingResolver($state);
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     */
+    private function resolveChannelSourceId(array $runtimeState, string $channel): string
+    {
+        $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
+        $value = trim((string)($sourceIds[$channel] ?? ''));
+        if ($value !== '') {
+            return $value;
+        }
+        if ($channel !== 'forms') {
+            $formsFallback = trim((string)($sourceIds['forms'] ?? ''));
+            if ($formsFallback !== '') {
+                return $formsFallback;
+            }
+        }
+        return trim((string)($runtimeState['projectSourceId'] ?? ''));
     }
 
     /**
@@ -382,9 +660,11 @@ class BurrowApiService extends Component
             if (!is_array($project)) {
                 continue;
             }
+            $client = is_array($project['client'] ?? null) ? $project['client'] : [];
             $result[] = [
                 'organizationId' => (string)($project['organizationId'] ?? $project['orgId'] ?? ''),
-                'clientId' => (string)($project['clientId'] ?? ''),
+                'clientId' => (string)($project['clientId'] ?? $client['id'] ?? ''),
+                'clientName' => (string)($project['clientName'] ?? $client['name'] ?? ''),
                 'projectId' => (string)($project['projectId'] ?? $project['id'] ?? ''),
                 'projectName' => (string)($project['projectName'] ?? $project['name'] ?? ''),
             ];

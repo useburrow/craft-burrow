@@ -122,32 +122,11 @@ class IntegrationsService extends Component
 
                 return $forms;
             } catch (\Throwable) {
-                // Fallback to direct table query if plugin API resolution fails.
+                return [];
             }
         }
 
-        if (!Craft::$app->getDb()->tableExists('{{%freeform_forms}}')) {
-            return [];
-        }
-
-        $rows = (new \craft\db\Query())
-            ->select(['id', 'name', 'handle'])
-            ->from('{{%freeform_forms}}')
-            ->orderBy(['name' => SORT_ASC, 'id' => SORT_ASC])
-            ->all();
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $forms[] = [
-                'id' => (string)($row['id'] ?? ''),
-                'name' => trim((string)($row['name'] ?? '')) ?: ((string)($row['handle'] ?? '') ?: 'Untitled Form'),
-                'handle' => (string)($row['handle'] ?? ''),
-            ];
-        }
-
-        return $forms;
+        return [];
     }
 
     /**
@@ -187,41 +166,11 @@ class IntegrationsService extends Component
                     return $fields;
                 }
             } catch (\Throwable) {
-                // Fallback to direct table query if plugin API resolution fails.
+                return [];
             }
         }
 
-        if (!Craft::$app->getDb()->tableExists('{{%freeform_fields}}')) {
-            return $fields;
-        }
-
-        $rows = (new \craft\db\Query())
-            ->select(['id', 'label', 'name', 'handle', 'type', 'inputType'])
-            ->from('{{%freeform_fields}}')
-            ->where(['formId' => (int)$formId])
-            ->orderBy(['id' => SORT_ASC])
-            ->all();
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $fieldId = trim((string)($row['id'] ?? ''));
-            if ($fieldId === '') {
-                continue;
-            }
-            $sourceLabel = trim((string)($row['label'] ?? $row['name'] ?? $row['handle'] ?? ''));
-            $sourceLabel = $sourceLabel !== '' ? $sourceLabel : ('Field ' . $fieldId);
-            $fieldType = trim((string)($row['type'] ?? $row['inputType'] ?? 'string'));
-            $fields[] = [
-                'externalFieldId' => $fieldId,
-                'sourceLabel' => $sourceLabel,
-                'dataType' => $fieldType !== '' ? $fieldType : 'string',
-                'canonicalKey' => $this->labelToCanonicalKey($sourceLabel),
-            ];
-        }
-
-        return $fields;
+        return [];
     }
 
     /**
@@ -229,25 +178,33 @@ class IntegrationsService extends Component
      */
     public function getFormieForms(): array
     {
-        if (!Craft::$app->getDb()->tableExists('{{%formie_forms}}')) {
+        $formClass = '\verbb\formie\elements\Form';
+        if (!class_exists($formClass) || !method_exists($formClass, 'find')) {
+            return [];
+        }
+        try {
+            $rows = $formClass::find()
+                ->orderBy(['title' => SORT_ASC, 'dateCreated' => SORT_ASC])
+                ->all();
+        } catch (\Throwable) {
             return [];
         }
 
-        $rows = (new \craft\db\Query())
-            ->select(['id', 'title', 'handle'])
-            ->from('{{%formie_forms}}')
-            ->orderBy(['title' => SORT_ASC, 'id' => SORT_ASC])
-            ->all();
-
         $forms = [];
         foreach ($rows as $row) {
-            if (!is_array($row)) {
+            if (!is_object($row)) {
                 continue;
             }
+            $id = $this->objectStringValue($row, ['id']);
+            if ($id === '') {
+                continue;
+            }
+            $name = $this->objectStringValue($row, ['title', 'name']);
+            $handle = $this->objectStringValue($row, ['handle']);
             $forms[] = [
-                'id' => (string)($row['id'] ?? ''),
-                'name' => trim((string)($row['title'] ?? '')) ?: ((string)($row['handle'] ?? '') ?: 'Untitled Form'),
-                'handle' => (string)($row['handle'] ?? ''),
+                'id' => $id,
+                'name' => $name !== '' ? $name : ($handle !== '' ? $handle : 'Untitled Form'),
+                'handle' => $handle,
             ];
         }
 
@@ -506,5 +463,28 @@ class IntegrationsService extends Component
         }
 
         return $result;
+    }
+
+    /**
+     * @param array<int,string> $keys
+     */
+    private function objectStringValue(object $source, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (method_exists($source, 'get' . ucfirst($key))) {
+                $value = $source->{'get' . ucfirst($key)}();
+                $text = trim((string)$value);
+                if ($text !== '') {
+                    return $text;
+                }
+            }
+            if (isset($source->{$key})) {
+                $text = trim((string)$source->{$key});
+                if ($text !== '') {
+                    return $text;
+                }
+            }
+        }
+        return '';
     }
 }

@@ -9,10 +9,16 @@ class FormTrackingService extends Component
     public function handleFreeformSubmissionEvent(Event $event): void
     {
         $submission = null;
+        $eventForm = null;
         if (method_exists($event, 'getSubmission')) {
             $submission = $event->getSubmission();
         } elseif (is_object($event->submission ?? null)) {
             $submission = $event->submission;
+        }
+        if (method_exists($event, 'getForm')) {
+            $eventForm = $event->getForm();
+        } elseif (is_object($event->form ?? null)) {
+            $eventForm = $event->form;
         }
         if (!is_object($submission)) {
             return;
@@ -26,6 +32,9 @@ class FormTrackingService extends Component
         }
 
         $formId = $this->extractSubmissionFormId($submission);
+        if ($formId <= 0 && is_object($eventForm)) {
+            $formId = $this->extractFormObjectId($eventForm);
+        }
         if ($formId <= 0 || !isset($configByFormId[$formId])) {
             return;
         }
@@ -156,18 +165,19 @@ class FormTrackingService extends Component
     {
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
         $freeform = is_array($integrationSettings['freeform'] ?? null) ? $integrationSettings['freeform'] : [];
-        $mode = trim((string)($freeform['mode'] ?? 'off'));
-        if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
-            return [];
-        }
+        $globalMode = trim((string)($freeform['mode'] ?? 'off'));
         $forms = is_array($freeform['forms'] ?? null) ? $freeform['forms'] : [];
         $byId = [];
-        foreach ($forms as $form) {
+        foreach ($forms as $key => $form) {
             if (!is_array($form)) {
                 continue;
             }
-            $formId = (int)($form['id'] ?? 0);
+            $formId = (int)($form['id'] ?? $key);
             if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
+                continue;
+            }
+            $mode = trim((string)($form['mode'] ?? $globalMode));
+            if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
                 continue;
             }
             $byId[$formId] = [
@@ -217,7 +227,7 @@ class FormTrackingService extends Component
             if ($label === '') {
                 $label = $handle;
             }
-            if ($target === 'property') {
+            if ($target === 'property' || $target === 'properties') {
                 $properties[$label] = $values[$handle];
             } else {
                 $tags[$label] = $values[$handle];
@@ -289,6 +299,20 @@ class FormTrackingService extends Component
     private function extractSubmissionFormId(object $submission): int
     {
         $raw = null;
+        foreach (['getFormId', 'getFormID'] as $method) {
+            if (method_exists($submission, $method)) {
+                try {
+                    $value = $submission->{$method}();
+                    if (is_numeric($value)) {
+                        $id = (int)$value;
+                        if ($id > 0) {
+                            return $id;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                }
+            }
+        }
         foreach (['formId', 'form_id'] as $prop) {
             if (property_exists($submission, $prop)) {
                 $raw = $submission->{$prop};
@@ -316,13 +340,9 @@ class FormTrackingService extends Component
             try {
                 $form = $submission->getForm();
                 if (is_object($form)) {
-                    foreach (['id', 'uid'] as $key) {
-                        if (isset($form->{$key}) && is_numeric($form->{$key})) {
-                            $id = (int)$form->{$key};
-                            if ($id > 0) {
-                                return $id;
-                            }
-                        }
+                    $id = $this->extractFormObjectId($form);
+                    if ($id > 0) {
+                        return $id;
                     }
                 }
             } catch (\Throwable $e) {
@@ -331,11 +351,9 @@ class FormTrackingService extends Component
 
         if (is_object($submission->form ?? null)) {
             $form = $submission->form;
-            if (is_numeric($form->id ?? null)) {
-                $id = (int)$form->id;
-                if ($id > 0) {
-                    return $id;
-                }
+            $id = $this->extractFormObjectId($form);
+            if ($id > 0) {
+                return $id;
             }
         }
 
@@ -348,6 +366,15 @@ class FormTrackingService extends Component
             try {
                 $form = $submission->getForm();
                 if (is_object($form)) {
+                    foreach (['getName', 'getTitle', 'getHandle'] as $method) {
+                        if (!method_exists($form, $method)) {
+                            continue;
+                        }
+                        $value = trim((string)$form->{$method}());
+                        if ($value !== '') {
+                            return $value;
+                        }
+                    }
                     foreach (['name', 'title', 'handle'] as $key) {
                         $value = trim((string)($form->{$key} ?? ''));
                         if ($value !== '') {
@@ -359,6 +386,35 @@ class FormTrackingService extends Component
             }
         }
         return '';
+    }
+
+    private function extractFormObjectId(object $form): int
+    {
+        foreach (['getId', 'getFormId'] as $method) {
+            if (!method_exists($form, $method)) {
+                continue;
+            }
+            try {
+                $value = $form->{$method}();
+                if (is_numeric($value)) {
+                    $id = (int)$value;
+                    if ($id > 0) {
+                        return $id;
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+        foreach (['id', 'formId'] as $key) {
+            $value = $form->{$key} ?? null;
+            if (is_numeric($value)) {
+                $id = (int)$value;
+                if ($id > 0) {
+                    return $id;
+                }
+            }
+        }
+        return 0;
     }
 
     private function objectDateValue(object $object, array $keys): string

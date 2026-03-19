@@ -229,6 +229,10 @@ class CommerceTrackingService extends Component
             }
         }
 
+        if ($published > 0 && $this->isCommerceFunnelEnabled($runtimeState)) {
+            $this->emitCartRecoveryIfApplicable($plugin, $runtimeState, $order, $orderId, $orderTotal, $currency, $customerToken, $submittedAt);
+        }
+
         $plugin->getLogs()->log(
             $failed === 0 ? 'info' : 'warning',
             $failed === 0 ? 'Commerce order events published' : 'Commerce order events publish failed',
@@ -245,6 +249,313 @@ class CommerceTrackingService extends Component
                 'failed' => $failed,
             ]
         );
+    }
+
+    public function handlePaymentProcessedEvent(Event $event): void
+    {
+        $transaction = is_object($event->transaction ?? null) ? $event->transaction : null;
+        if ($transaction === null) {
+            return;
+        }
+
+        $status = strtolower(trim($this->stringValue($transaction, ['status'])));
+        if ($status === '' || $status === 'success' || $status === 'processing' || $status === 'redirect') {
+            return;
+        }
+
+        $order = is_object($transaction->order ?? null) ? $transaction->order : null;
+        if ($order === null) {
+            $order = is_object($event->sender ?? null) ? $event->sender : null;
+        }
+        if ($order === null) {
+            return;
+        }
+
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+            return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+
+        $cartTotal = $this->extractOrderTotal($order);
+        $paymentMethod = $this->extractPaymentMethod($order);
+        $customerToken = $this->extractCustomerToken($order);
+
+        $failureReason = $this->stringValue($transaction, ['message', 'code']);
+        if ($failureReason === '') {
+            $response = is_object($transaction->response ?? null) ? $transaction->response : null;
+            if ($response !== null) {
+                $failureReason = $this->stringValue($response, ['getMessage', 'message', 'code']);
+            }
+        }
+        if ($failureReason === '') {
+            $failureReason = 'processing_error';
+        }
+
+        $tags = [
+            'provider' => 'craft_commerce',
+            'currency' => $currency,
+        ];
+        if ($customerToken !== '') {
+            $tags['customerToken'] = $customerToken;
+        }
+        if ($paymentMethod !== '') {
+            $tags['paymentMethod'] = $paymentMethod;
+        }
+
+        $eventEnvelope = $plugin->getBurrowApi()->buildEcommercePaymentFailedEvent($runtimeState, [
+            'orderId' => $orderId,
+            'cartTotal' => $cartTotal,
+            'currency' => $currency,
+            'failureReason' => $failureReason,
+            'paymentMethod' => $paymentMethod,
+            'timestamp' => gmdate('c'),
+            'tags' => $tags,
+        ]);
+        if (empty($eventEnvelope)) {
+            return;
+        }
+
+        $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, [
+            'type' => 'payment_failed',
+            'orderId' => $orderId,
+            'failureReason' => $failureReason,
+        ]);
+    }
+
+    /**
+     * Detect checkout initiation: fires on every Order save, but short-circuits
+     * early and deduplicates so the event is emitted at most once per cart.
+     * The heuristic is "incomplete order with email + line items".
+     */
+    public function handleOrderSavedEvent(Event $event): void
+    {
+        $order = is_object($event->sender ?? null) ? $event->sender : null;
+        if ($order === null) {
+            return;
+        }
+
+        if (isset($order->isCompleted) && $order->isCompleted) {
+            return;
+        }
+        if (isset($order->dateOrdered) && $order->dateOrdered !== null) {
+            return;
+        }
+
+        $email = $this->stringValue($order, ['email']);
+        if ($email === '') {
+            return;
+        }
+
+        $lineItems = [];
+        if (method_exists($order, 'getLineItems')) {
+            $lineItems = (array)$order->getLineItems();
+        }
+        if (empty($lineItems)) {
+            return;
+        }
+
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+            return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        if ($orderId === '') {
+            return;
+        }
+
+        $checkoutKey = 'checkout_started_' . $orderId;
+        if ($plugin->getQueue()->wasSent($checkoutKey)) {
+            return;
+        }
+
+        $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+
+        $cartTotal = $this->floatValue($order, ['totalPrice', 'total', 'itemSubtotal']);
+        $cartItemCount = count($lineItems);
+        if ($cartItemCount <= 0) {
+            $cartItemCount = max(0, (int)round($this->floatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+        }
+
+        $customerToken = $this->extractCustomerToken($order);
+        $isGuest = $this->extractIsGuest($order);
+
+        $tags = [
+            'provider' => 'craft_commerce',
+            'currency' => $currency,
+        ];
+        if ($customerToken !== '') {
+            $tags['customerToken'] = $customerToken;
+        }
+        if ($isGuest !== '') {
+            $tags['isGuest'] = $isGuest;
+        }
+
+        $eventEnvelope = $plugin->getBurrowApi()->buildEcommerceCheckoutStartedEvent($runtimeState, [
+            'cartTotal' => $cartTotal,
+            'cartItemCount' => $cartItemCount,
+            'currency' => $currency,
+            'timestamp' => $this->dateValue($order, ['dateUpdated', 'dateCreated']) ?: gmdate('c'),
+            'tags' => $tags,
+        ]);
+
+        if (empty($eventEnvelope)) {
+            return;
+        }
+
+        $settings = $plugin->getSettings();
+        $result = $plugin->getBurrowApi()->publishEvents(
+            $settings->baseUrl,
+            $settings->apiKey,
+            $runtimeState,
+            [$eventEnvelope]
+        );
+
+        $channel = trim((string)($eventEnvelope['channel'] ?? ''));
+        $eventName = trim((string)($eventEnvelope['event'] ?? ''));
+
+        if ($result['ok']) {
+            $plugin->getQueue()->markSent($checkoutKey, $eventEnvelope, $channel, $eventName);
+        } else {
+            $error = trim((string)($result['error'] ?? 'Checkout started publish failed.'));
+            $plugin->getQueue()->markFailed($checkoutKey, $eventEnvelope, $error, $channel, $eventName);
+        }
+    }
+
+    private function emitCartRecoveryIfApplicable(
+        object $plugin,
+        array $runtimeState,
+        object $order,
+        string $orderId,
+        float $orderTotal,
+        string $currency,
+        string $customerToken,
+        string $timestamp
+    ): void {
+        if ($customerToken === '') {
+            return;
+        }
+
+        $abandonmentDetails = $this->getAbandonmentDetails($customerToken);
+        if ($abandonmentDetails === null) {
+            return;
+        }
+
+        $recoveryEnvelope = $plugin->getBurrowApi()->buildEcommerceCartRecoveredEvent($runtimeState, [
+            'orderId' => $orderId,
+            'orderTotal' => $orderTotal,
+            'originalCartTotal' => $abandonmentDetails['originalCartTotal'],
+            'currency' => $currency,
+            'minutesSinceAbandonment' => $abandonmentDetails['minutesSinceAbandonment'],
+            'timestamp' => $timestamp,
+            'tags' => [
+                'provider' => 'craft_commerce',
+                'currency' => $currency,
+                'customerToken' => $customerToken,
+            ],
+        ]);
+
+        if (empty($recoveryEnvelope)) {
+            return;
+        }
+
+        $ok = $this->publishAndTrackRealtimeEvent($recoveryEnvelope, $runtimeState, [
+            'type' => 'cart_recovered',
+            'orderId' => $orderId,
+        ]);
+
+        if ($ok) {
+            $this->clearAbandonmentSignal($customerToken);
+            $plugin->getLogs()->log('info', 'Cart recovery detected at order completion', 'commerce', 'ecommerce', null, [
+                'orderId' => $orderId,
+                'minutesSinceAbandonment' => $abandonmentDetails['minutesSinceAbandonment'],
+            ]);
+        }
+    }
+
+    /**
+     * Looks up the abandonment signal and enriches with timing and original cart total.
+     *
+     * @return array{originalCartTotal:float,minutesSinceAbandonment:int}|null
+     */
+    private function getAbandonmentDetails(string $customerToken): ?array
+    {
+        if ($customerToken === '') {
+            return null;
+        }
+
+        try {
+            $signalRow = \Craft::$app->getDb()->createCommand(
+                'SELECT sent_at FROM {{%burrow_outbox_sent}} WHERE event_key = :key LIMIT 1',
+                [':key' => 'abandonment_' . $customerToken]
+            )->queryOne();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!is_array($signalRow) || empty($signalRow['sent_at'])) {
+            return null;
+        }
+
+        $minutesSinceAbandonment = 0;
+        try {
+            $abandonedAt = new \DateTimeImmutable($signalRow['sent_at'], new \DateTimeZone('UTC'));
+            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            $minutesSinceAbandonment = max(0, (int)round(($now->getTimestamp() - $abandonedAt->getTimestamp()) / 60));
+        } catch (\Throwable) {
+        }
+
+        $originalCartTotal = 0.0;
+        try {
+            $outboxRow = \Craft::$app->getDb()->createCommand(
+                "SELECT payload FROM {{%burrow_outbox}}
+                 WHERE event_name IN ('ecommerce.cart.abandoned', 'ecommerce.checkout.abandoned')
+                 AND status = 'sent'
+                 ORDER BY updated_at DESC
+                 LIMIT 1"
+            )->queryOne();
+            if (is_array($outboxRow) && !empty($outboxRow['payload'])) {
+                $payload = $outboxRow['payload'];
+                if (is_string($payload)) {
+                    $payload = json_decode($payload, true);
+                }
+                if (is_array($payload)) {
+                    $props = is_array($payload['properties'] ?? null) ? $payload['properties'] : [];
+                    $originalCartTotal = (float)($props['cartTotal'] ?? 0);
+                }
+            }
+        } catch (\Throwable) {
+        }
+
+        return [
+            'originalCartTotal' => $originalCartTotal,
+            'minutesSinceAbandonment' => $minutesSinceAbandonment,
+        ];
+    }
+
+    private function clearAbandonmentSignal(string $customerToken): void
+    {
+        if ($customerToken === '') {
+            return;
+        }
+        try {
+            \Craft::$app->getDb()->createCommand()->delete(
+                '{{%burrow_outbox_sent}}',
+                ['event_key' => 'abandonment_' . $customerToken]
+            )->execute();
+        } catch (\Throwable) {
+        }
     }
 
     private function extractOrderIdentifier(object $order): string

@@ -208,6 +208,49 @@ class Plugin extends CraftPlugin
                 }
             );
         }
+
+        $elementClass = '\craft\base\Element';
+        if (class_exists($elementClass) && defined($elementClass . '::EVENT_AFTER_SAVE')) {
+            /** @var string $saveEventName */
+            $saveEventName = constant($elementClass . '::EVENT_AFTER_SAVE');
+            Event::on(
+                $orderClass,
+                $saveEventName,
+                function (\yii\base\Event $event): void {
+                    try {
+                        $this->getCommerceTracking()->handleOrderSavedEvent($event);
+                    } catch (\Throwable $e) {
+                        $this->getLogs()->log('warning', 'Commerce checkout detection dispatch failed', 'commerce', 'ecommerce', null, [
+                            'handler' => 'handleOrderSavedEvent',
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            );
+        }
+
+        $paymentsClass = '\craft\commerce\services\Payments';
+        if (class_exists($paymentsClass)) {
+            $paymentConst = $paymentsClass . '::EVENT_AFTER_PROCESS_PAYMENT';
+            if (defined($paymentConst)) {
+                /** @var string $paymentEventName */
+                $paymentEventName = constant($paymentConst);
+                Event::on(
+                    $paymentsClass,
+                    $paymentEventName,
+                    function (\yii\base\Event $event): void {
+                        try {
+                            $this->getCommerceTracking()->handlePaymentProcessedEvent($event);
+                        } catch (\Throwable $e) {
+                            $this->getLogs()->log('warning', 'Commerce payment event dispatch failed', 'commerce', 'ecommerce', null, [
+                                'handler' => 'handlePaymentProcessedEvent',
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+                );
+            }
+        }
     }
 
     private function _registerFormHooks(): void
@@ -296,6 +339,19 @@ class Plugin extends CraftPlugin
             if (($heartbeatLastRun === 0 || ($now - $heartbeatLastRun) >= $heartbeatInterval) && ($heartbeatQueued === 0 || ($now - $heartbeatQueued) > 900)) {
                 Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\PublishSystemHeartbeatJob());
                 $systemJobs['heartbeatQueuedAt'] = gmdate('c');
+            }
+
+            // Cart abandonment scan cadence (30 minutes), gated by funnel opt-in.
+            $commerceConfig = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
+            $funnelEnabled = (string)($commerceConfig['mode'] ?? 'off') === 'track' && !empty($commerceConfig['ecommerceFunnel']);
+            if ($funnelEnabled) {
+                $cartAbandonmentInterval = 1800;
+                $cartAbandonmentLastRun = $this->_timestampFromState((string)($systemJobs['cartAbandonmentLastRunAt'] ?? ''));
+                $cartAbandonmentQueued = $this->_timestampFromState((string)($systemJobs['cartAbandonmentQueuedAt'] ?? ''));
+                if (($cartAbandonmentLastRun === 0 || ($now - $cartAbandonmentLastRun) >= $cartAbandonmentInterval) && ($cartAbandonmentQueued === 0 || ($now - $cartAbandonmentQueued) > 900)) {
+                    Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\DetectAbandonedCartsJob());
+                    $systemJobs['cartAbandonmentQueuedAt'] = gmdate('c');
+                }
             }
 
             $integrationSettings['systemJobs'] = $systemJobs;

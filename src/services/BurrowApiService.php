@@ -704,6 +704,243 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Build ecommerce cart abandoned lifecycle envelope.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceCartAbandonedEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            return [];
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = 'buildEcommerceCartAbandonedEvent';
+        $routing = $this->buildRoutingResolver($runtimeState);
+
+        $timestamp = trim((string)($payload['timestamp'] ?? gmdate('c')));
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+
+        if (method_exists($builderClass, $builderMethod)) {
+            try {
+                return $builderClass::{$builderMethod}(array_merge($payload, [
+                    'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                    'clientId' => $this->resolveClientId($runtimeState),
+                    'timestamp' => $timestamp,
+                ]), $routing);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce cart.abandoned SDK builder failed, using manual envelope',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $ecommerceSourceId,
+            'channel' => 'ecommerce',
+            'event' => 'ecommerce.cart.abandoned',
+            'timestamp' => $timestamp,
+            'source' => 'craft-plugin',
+            'isLifecycle' => true,
+            'entityType' => 'cart',
+            'state' => 'abandoned',
+            'externalEntityId' => trim((string)($payload['externalEntityId'] ?? '')),
+            'tags' => $tags,
+            'properties' => [
+                'cartTotal' => $payload['cartTotal'] ?? 0,
+                'cartItemCount' => $payload['cartItemCount'] ?? 0,
+                'currency' => $payload['currency'] ?? '',
+                'minutesSinceLastActivity' => $payload['minutesSinceLastActivity'] ?? 0,
+            ],
+        ];
+    }
+
+    /**
+     * Build ecommerce payment failed envelope (discrete, not lifecycle).
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommercePaymentFailedEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            return [];
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = 'buildEcommercePaymentFailedEvent';
+        $routing = $this->buildRoutingResolver($runtimeState);
+
+        $timestamp = trim((string)($payload['timestamp'] ?? gmdate('c')));
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+
+        if (method_exists($builderClass, $builderMethod)) {
+            try {
+                return $builderClass::{$builderMethod}(array_merge($payload, [
+                    'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                    'clientId' => $this->resolveClientId($runtimeState),
+                    'timestamp' => $timestamp,
+                ]), $routing);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce payment.failed SDK builder failed, using manual envelope',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $ecommerceSourceId,
+            'channel' => 'ecommerce',
+            'event' => 'ecommerce.payment.failed',
+            'timestamp' => $timestamp,
+            'source' => 'craft-plugin',
+            'tags' => $tags,
+            'properties' => [
+                'orderId' => $payload['orderId'] ?? '',
+                'cartTotal' => $payload['cartTotal'] ?? 0,
+                'currency' => $payload['currency'] ?? '',
+                'failureReason' => $payload['failureReason'] ?? 'processing_error',
+                'paymentMethod' => $payload['paymentMethod'] ?? '',
+            ],
+        ];
+    }
+
+    /**
+     * Build ecommerce cart recovered lifecycle envelope.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceCartRecoveredEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            return [];
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = 'buildEcommerceCartRecoveredEvent';
+        $routing = $this->buildRoutingResolver($runtimeState);
+
+        $timestamp = trim((string)($payload['timestamp'] ?? gmdate('c')));
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+
+        if (method_exists($builderClass, $builderMethod)) {
+            try {
+                return $builderClass::{$builderMethod}(array_merge($payload, [
+                    'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                    'clientId' => $this->resolveClientId($runtimeState),
+                    'timestamp' => $timestamp,
+                ]), $routing);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce cart.recovered SDK builder failed, using manual envelope',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $ecommerceSourceId,
+            'channel' => 'ecommerce',
+            'event' => 'ecommerce.cart.recovered',
+            'timestamp' => $timestamp,
+            'source' => 'craft-plugin',
+            'tags' => $tags,
+            'properties' => [
+                'orderId' => $payload['orderId'] ?? '',
+                'orderTotal' => $payload['orderTotal'] ?? 0,
+                'originalCartTotal' => $payload['originalCartTotal'] ?? 0,
+                'currency' => $payload['currency'] ?? '',
+                'minutesSinceAbandonment' => $payload['minutesSinceAbandonment'] ?? 0,
+            ],
+        ];
+    }
+
+    /**
+     * Build ecommerce checkout started envelope.
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceCheckoutStartedEvent(array $runtimeState, array $payload): array
+    {
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            return [];
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = 'buildEcommerceCheckoutStartedEvent';
+        $routing = $this->buildRoutingResolver($runtimeState);
+
+        $timestamp = trim((string)($payload['timestamp'] ?? gmdate('c')));
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+
+        if (method_exists($builderClass, $builderMethod)) {
+            try {
+                return $builderClass::{$builderMethod}(array_merge($payload, [
+                    'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                    'clientId' => $this->resolveClientId($runtimeState),
+                    'timestamp' => $timestamp,
+                ]), $routing);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce checkout.started SDK builder failed, using manual envelope',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $ecommerceSourceId,
+            'channel' => 'ecommerce',
+            'event' => 'ecommerce.checkout.started',
+            'timestamp' => $timestamp,
+            'source' => 'craft-plugin',
+            'tags' => $tags,
+            'properties' => [
+                'cartTotal' => $payload['cartTotal'] ?? 0,
+                'cartItemCount' => $payload['cartItemCount'] ?? 0,
+                'currency' => $payload['currency'] ?? '',
+            ],
+        ];
+    }
+
+    /**
      * @param array<int,array<string,mixed>> $formsContracts
      */
     private function buildFormsContractPayload(array $runtimeState, array $formsContracts): array

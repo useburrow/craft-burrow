@@ -16,7 +16,6 @@ class PublishSystemSnapshotJob extends BaseJob
     {
         /** @var Queue $queue */
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
 
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
@@ -24,7 +23,7 @@ class PublishSystemSnapshotJob extends BaseJob
         $systemJobs['snapshotQueuedAt'] = '';
         $systemJobs['snapshotLastAttemptAt'] = gmdate('c');
 
-        if (trim((string)$settings->baseUrl) === '' || trim((string)$settings->apiKey) === '' || trim((string)($runtimeState['projectId'] ?? '')) === '') {
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
             $systemJobs['snapshotLastError'] = 'Missing Burrow connection/routing context.';
             $integrationSettings['systemJobs'] = $systemJobs;
             $runtimeState['integrationSettings'] = $integrationSettings;
@@ -34,8 +33,8 @@ class PublishSystemSnapshotJob extends BaseJob
 
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
         $result = $plugin->getBurrowApi()->publishSystemSnapshot(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $runtimeState['lastSnapshot']
         );

@@ -24,7 +24,7 @@ class Plugin extends CraftPlugin
 
     public static ?Plugin $plugin = null;
 
-    public string $schemaVersion = '5.0.0';
+    public string $schemaVersion = '5.3.0';
     public bool $hasCpSettings = true;
     public bool $hasCpSection = true;
 
@@ -51,6 +51,104 @@ class Plugin extends CraftPlugin
     protected function createSettingsModel(): ?Model
     {
         return new Settings();
+    }
+
+    /**
+     * Resolves API base URL from DB-backed runtime state first, then project config plugin settings.
+     * Use this (not raw {@see getSettings()}) so production saves work when `allowAdminChanges` is false.
+     */
+    public function getBurrowBaseUrl(): string
+    {
+        $state = $this->getState()->getState();
+        $fromState = trim((string)($state['connectionBaseUrl'] ?? ''));
+        if ($fromState !== '') {
+            return $fromState;
+        }
+
+        return trim((string)$this->getSettings()->baseUrl);
+    }
+
+    /**
+     * Account-level API key for onboarding (discover/link). Stored in DB only while setting up; cleared after a project link returns an ingestion key.
+     * Does not return project-config `apiKey` once {@see runtimeStateHasIngestionKey} is true so stale YAML cannot override project-scoped auth.
+     */
+    public function getBurrowApiKey(): string
+    {
+        $state = $this->getState()->getState();
+        $fromState = trim((string)($state['connectionApiKey'] ?? ''));
+        if ($fromState !== '') {
+            return $fromState;
+        }
+
+        if ($this->runtimeStateHasIngestionKey($state)) {
+            return '';
+        }
+
+        return trim((string)$this->getSettings()->apiKey);
+    }
+
+    /**
+     * Whether runtime state has a project ingestion key from Burrow (used for event dispatch and related API calls).
+     *
+     * @param array<string,mixed>|null $state
+     */
+    public function runtimeStateHasIngestionKey(?array $state = null): bool
+    {
+        $state ??= $this->getState()->getState();
+        $key = '';
+        if (is_array($state['ingestionKey'] ?? null)) {
+            $key = trim((string)($state['ingestionKey']['key'] ?? ''));
+        }
+
+        return $key !== '';
+    }
+
+    /**
+     * Whether outbound Burrow API calls can authenticate (ingestion key and/or temporary account key), given routing context.
+     *
+     * @param array<string,mixed>|null $runtimeState
+     */
+    public function canDispatchToBurrow(?array $runtimeState = null): bool
+    {
+        $runtimeState ??= $this->getState()->getState();
+        if ($this->getBurrowBaseUrl() === '' || trim((string)($runtimeState['projectId'] ?? '')) === '') {
+            return false;
+        }
+        if ($this->runtimeStateHasIngestionKey($runtimeState)) {
+            return true;
+        }
+
+        return $this->getBurrowApiKey() !== '';
+    }
+
+    /**
+     * Removes account-level API key from project config when CP admin changes are allowed (ingestion key is sufficient after link).
+     */
+    public function clearAccountApiKeyFromProjectConfigIfAllowed(): void
+    {
+        if (!Craft::$app->getConfig()->getGeneral()->allowAdminChanges) {
+            return;
+        }
+        $settings = $this->getSettings();
+        if (trim((string)$settings->apiKey) === '') {
+            return;
+        }
+        $settings->apiKey = '';
+        Craft::$app->getPlugins()->savePluginSettings($this, $settings->toArray());
+    }
+
+    /**
+     * Plugin settings with connection fields merged for CP display (avoids mutating the cached settings model).
+     */
+    public function getConnectionSettingsForDisplay(): Settings
+    {
+        $model = new Settings();
+        $stored = $this->getSettings();
+        $model->pluginName = $stored->pluginName;
+        $model->baseUrl = $this->getBurrowBaseUrl();
+        $model->apiKey = $this->getBurrowApiKey();
+
+        return $model;
     }
 
     public function getSettingsResponse(): mixed
@@ -314,8 +412,7 @@ class Plugin extends CraftPlugin
             if (empty($runtimeState['onboardingCompleted']) || trim((string)($runtimeState['projectId'] ?? '')) === '') {
                 return;
             }
-            $settings = $this->getSettings();
-            if (trim((string)$settings->baseUrl) === '' || trim((string)$settings->apiKey) === '') {
+            if (!$this->canDispatchToBurrow($runtimeState)) {
                 return;
             }
 

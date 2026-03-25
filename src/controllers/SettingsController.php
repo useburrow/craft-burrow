@@ -17,7 +17,7 @@ class SettingsController extends Controller
 
         $plugin = Plugin::getInstance();
         $integrationsService = $plugin->getIntegrations();
-        $settings = $plugin->getSettings();
+        $settings = $plugin->getConnectionSettingsForDisplay();
         $runtimeState = $plugin->getState()->getState();
         $availableIntegrations = $integrationsService->getAvailableIntegrations();
         $selectedIntegrations = array_values(array_filter(array_map('strval', (array)($runtimeState['selectedIntegrations'] ?? []))));
@@ -106,8 +106,9 @@ class SettingsController extends Controller
         $projectUrl = trim((string)($runtimeState['burrowProject']['url'] ?? ''));
         if ($projectUrl === '') {
             $path = trim((string)($runtimeState['burrowProject']['path'] ?? ''));
-            if ($path !== '' && trim((string)$settings->baseUrl) !== '') {
-                $parts = parse_url((string)$settings->baseUrl);
+            $base = $plugin->getBurrowBaseUrl();
+            if ($path !== '' && $base !== '') {
+                $parts = parse_url($base);
                 if (is_array($parts) && !empty($parts['scheme']) && !empty($parts['host'])) {
                     $host = (string)$parts['host'];
                     if (str_starts_with($host, 'api.')) {
@@ -150,7 +151,6 @@ class SettingsController extends Controller
         $this->requirePermission('accessPlugin-burrow');
 
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $state = $plugin->getState()->getState();
         $queueStats = $plugin->getQueue()->stats();
         $formsContracts = $plugin->getIntegrations()->buildFormsContracts($state);
@@ -171,8 +171,9 @@ class SettingsController extends Controller
         $projectUrl = trim((string)($state['burrowProject']['url'] ?? ''));
         if ($projectUrl === '') {
             $path = trim((string)($state['burrowProject']['path'] ?? ''));
-            if ($path !== '' && trim((string)$settings->baseUrl) !== '') {
-                $parts = parse_url((string)$settings->baseUrl);
+            $base = $plugin->getBurrowBaseUrl();
+            if ($path !== '' && $base !== '') {
+                $parts = parse_url($base);
                 if (is_array($parts) && !empty($parts['scheme']) && !empty($parts['host'])) {
                     $host = (string)$parts['host'];
                     if (str_starts_with($host, 'api.')) {
@@ -326,33 +327,40 @@ class SettingsController extends Controller
 
         $request = Craft::$app->getRequest();
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
-        $settings->baseUrl = trim((string)$request->getBodyParam('baseUrl', $settings->baseUrl));
-        $settings->apiKey = trim((string)$request->getBodyParam('apiKey', $settings->apiKey));
+        $baseUrl = trim((string)$request->getBodyParam('baseUrl', $plugin->getBurrowBaseUrl()));
+        $apiKey = trim((string)$request->getBodyParam('apiKey', $plugin->getBurrowApiKey()));
 
-        if ($settings->baseUrl === '' || $settings->apiKey === '') {
+        if ($baseUrl === '' || $apiKey === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Base URL and API key are required.'));
             return $this->redirect('burrow/settings?step=connection');
         }
 
-        if (!Craft::$app->getConfig()->getGeneral()->allowAdminChanges) {
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Changes to plugin settings are not permitted in this environment.'));
-            return $this->redirect('burrow/settings?step=connection');
-        }
-
-        if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
-            $errors = $settings->getFirstErrors();
-            $message = Craft::t('burrow', 'Could not save base URL/API key.');
-            if (!empty($errors)) {
-                $message .= ' ' . implode(' ', array_values($errors));
-            }
-            Craft::error('Burrow settings save failed: ' . json_encode($errors), __METHOD__);
-            Craft::$app->getSession()->setError($message);
-            return $this->redirect('burrow/settings?step=connection');
-        }
-
         $runtimeState = $plugin->getState()->getState();
-        $discover = $plugin->getBurrowApi()->discover($settings->baseUrl, $settings->apiKey, (array)($runtimeState['capabilities'] ?? []));
+        $runtimeState['connectionBaseUrl'] = $baseUrl;
+        $runtimeState['connectionApiKey'] = $apiKey;
+        if (!$plugin->getState()->saveState($runtimeState)) {
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'Could not save connection settings.'));
+            return $this->redirect('burrow/settings?step=connection');
+        }
+
+        $general = Craft::$app->getConfig()->getGeneral();
+        if ($general->allowAdminChanges) {
+            $settings = $plugin->getSettings();
+            $settings->baseUrl = $baseUrl;
+            $settings->apiKey = $apiKey;
+            if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
+                $errors = $settings->getFirstErrors();
+                $message = Craft::t('burrow', 'Could not sync connection to project config.');
+                if (!empty($errors)) {
+                    $message .= ' ' . implode(' ', array_values($errors));
+                }
+                Craft::error('Burrow project config sync failed: ' . json_encode($errors), __METHOD__);
+                Craft::$app->getSession()->setError($message);
+                return $this->redirect('burrow/settings?step=connection');
+            }
+        }
+
+        $discover = $plugin->getBurrowApi()->discover($baseUrl, $apiKey, (array)($runtimeState['capabilities'] ?? []));
         if (!$discover['ok']) {
             $plugin->getLogs()->log('error', 'Connection discover failed', 'onboarding', 'system', null, ['error' => $discover['error']]);
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Connection failed: {error}', ['error' => $discover['error']]));
@@ -378,7 +386,6 @@ class SettingsController extends Controller
 
         $request = Craft::$app->getRequest();
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
 
         $rawSelection = (string)$request->getBodyParam('projectSelection', '');
@@ -417,8 +424,8 @@ class SettingsController extends Controller
         );
 
         $link = $plugin->getBurrowApi()->link(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $selection,
             (array)$runtimeState['capabilities'],
             $runtimeState
@@ -430,8 +437,10 @@ class SettingsController extends Controller
         }
 
         $runtimeState = $plugin->getBurrowApi()->applyLinkResult($runtimeState, $link);
+        $runtimeState['connectionApiKey'] = '';
         $runtimeState['onboardingStep'] = 'integrations';
         $plugin->getState()->saveState($runtimeState);
+        $plugin->clearAccountApiKeyFromProjectConfigIfAllowed();
         $plugin->getLogs()->log('info', 'Project linked', 'onboarding', 'system', null, $selection);
 
         Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Project selected and linked.'));
@@ -591,7 +600,6 @@ class SettingsController extends Controller
         $this->requirePermission('accessPlugin-burrow');
 
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
         if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Project is not linked yet. Complete Step 2 before syncing contracts.'));
@@ -605,8 +613,8 @@ class SettingsController extends Controller
         }
 
         $result = $plugin->getBurrowApi()->submitFormsContracts(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $contracts
         );
@@ -639,8 +647,8 @@ class SettingsController extends Controller
         $runtimeState['integrationSettings'] = $integrationSettings;
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
         $snapshotResult = $plugin->getBurrowApi()->publishSystemSnapshot(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $runtimeState['lastSnapshot']
         );
@@ -681,12 +689,11 @@ class SettingsController extends Controller
         $this->requirePermission('accessPlugin-burrow');
 
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
         $syncResult = $plugin->getBurrowApi()->publishSystemSnapshot(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $runtimeState['lastSnapshot']
         );

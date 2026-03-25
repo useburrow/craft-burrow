@@ -524,10 +524,9 @@ class FormTrackingService extends Component
             return;
         }
 
-        $settings = $plugin->getSettings();
         $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             [$eventEnvelope]
         );

@@ -231,7 +231,7 @@ class BurrowApiService extends Component
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
-                false,
+                true,
                 false
             );
             $request = new \Burrow\Sdk\Contracts\FormsContractSubmissionRequest($this->buildFormsContractPayload($runtimeState, $formsContracts));

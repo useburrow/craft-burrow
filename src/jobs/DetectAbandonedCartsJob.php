@@ -14,7 +14,6 @@ class DetectAbandonedCartsJob extends BaseJob
     public function execute($queue): void
     {
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
 
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
@@ -27,7 +26,7 @@ class DetectAbandonedCartsJob extends BaseJob
             return;
         }
 
-        if (trim((string)$settings->baseUrl) === '' || trim((string)$settings->apiKey) === '' || trim((string)($runtimeState['projectId'] ?? '')) === '') {
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
             $this->saveJobState($plugin, $runtimeState, $integrationSettings, $systemJobs, 'Missing Burrow connection/routing context.');
             return;
         }
@@ -184,10 +183,9 @@ class DetectAbandonedCartsJob extends BaseJob
             return 'failed';
         }
 
-        $settings = $plugin->getSettings();
         $result = $plugin->getBurrowApi()->publishEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             [$eventEnvelope]
         );

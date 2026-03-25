@@ -16,7 +16,6 @@ class PublishSystemHeartbeatJob extends BaseJob
     {
         /** @var Queue $queue */
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
 
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
@@ -24,7 +23,7 @@ class PublishSystemHeartbeatJob extends BaseJob
         $systemJobs['heartbeatQueuedAt'] = '';
         $systemJobs['heartbeatLastAttemptAt'] = gmdate('c');
 
-        if (trim((string)$settings->baseUrl) === '' || trim((string)$settings->apiKey) === '' || trim((string)($runtimeState['projectId'] ?? '')) === '') {
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
             $systemJobs['heartbeatLastError'] = 'Missing Burrow connection/routing context.';
             $integrationSettings['systemJobs'] = $systemJobs;
             $runtimeState['integrationSettings'] = $integrationSettings;
@@ -33,8 +32,8 @@ class PublishSystemHeartbeatJob extends BaseJob
         }
 
         $result = $plugin->getBurrowApi()->publishSystemHeartbeat(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             0.0
         );

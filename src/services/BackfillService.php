@@ -60,7 +60,6 @@ class BackfillService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $eventKeys = [];
         $pendingEvents = [];
         $skippedDuplicates = 0;
@@ -92,8 +91,8 @@ class BackfillService extends Component
             ];
         }
         $sdkResult = $plugin->getBurrowApi()->submitBackfillEvents(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $pendingEvents,
             $windowStart,

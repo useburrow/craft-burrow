@@ -4,6 +4,26 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.0] - 2026-03-25
+
+### Added
+
+- Runtime state columns `connectionBaseUrl` and `connectionApiKey` (migration) so Control Panel connection can be saved when `allowAdminChanges` is `false`.
+- `Plugin::getBurrowBaseUrl()`, `getBurrowApiKey()`, `getConnectionSettingsForDisplay()`, `canDispatchToBurrow()`, `runtimeStateHasIngestionKey()`, and `clearAccountApiKeyFromProjectConfigIfAllowed()` for consistent credential resolution across CP, queue jobs, and the snapshot API.
+- `helpers/CredentialCrypto` — encrypts `ingestionKey.key` and `connectionApiKey` at rest via `Craft::$app->getSecurity()->encryptByKey()` / `decryptByKey()` with distinct HKDF info strings; legacy plaintext values are read until the next save re-seals them.
+
+### Changed
+
+- Connection step persists credentials to the database first; project-config plugin settings are updated only when admin changes are permitted.
+- After a successful project link, the **account-level** API key is cleared from runtime state (short-lived bootstrap); project **ingestion** key remains for ongoing API use. When `allowAdminChanges` is `true`, the plugin `apiKey` setting is also cleared after link.
+- `getBurrowApiKey()` no longer falls back to project-config `apiKey` when an ingestion key exists, so stale YAML cannot override project-scoped auth.
+- Forms contract submission uses ingestion-first SDK client auth (same pattern as event dispatch).
+- Snapshot, heartbeat, abandoned-cart jobs, and the stack-snapshot API gate on `canDispatchToBurrow()` so ingestion-only installs work without a stored account key.
+
+### Fixed
+
+- Control Panel connection save no longer hard-depends on `allowAdminChanges`; production environments with project config frozen can complete onboarding using DB-backed credentials.
+
 ## [5.2.0] - 2026-03-19
 
 ### Added

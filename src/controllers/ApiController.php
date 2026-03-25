@@ -33,22 +33,17 @@ class ApiController extends Controller
         }
 
         $plugin = Plugin::getInstance();
-        $settings = $plugin->getSettings();
         $runtimeState = $plugin->getState()->getState();
 
-        if (
-            trim((string)$settings->baseUrl) === '' ||
-            trim((string)$settings->apiKey) === '' ||
-            trim((string)($runtimeState['projectId'] ?? '')) === ''
-        ) {
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
             return $this->jsonResponse(['ok' => false, 'error' => 'not_configured'], 422);
         }
 
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
 
         $result = $plugin->getBurrowApi()->publishSystemSnapshot(
-            $settings->baseUrl,
-            $settings->apiKey,
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
             $runtimeState,
             $runtimeState['lastSnapshot']
         );

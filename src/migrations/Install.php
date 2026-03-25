@@ -24,6 +24,8 @@ class Install extends Migration
                 'lastSnapshot' => $this->json(),
                 'onboardingStep' => $this->string()->defaultValue('connection'),
                 'onboardingCompleted' => $this->boolean()->defaultValue(false),
+                'connectionBaseUrl' => $this->text(),
+                'connectionApiKey' => $this->text(),
                 'dateCreated' => $this->dateTime()->notNull(),
                 'dateUpdated' => $this->dateTime()->notNull(),
                 'uid' => $this->uid(),

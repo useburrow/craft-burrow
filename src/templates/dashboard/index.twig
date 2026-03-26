@@ -124,6 +124,15 @@
                 </span>
             {% endif %}
         </p>
+        {% if backfillStatus == 'queued' or backfillStatus == 'running' %}
+            <p class="burrow-card-detail" style="margin: 10px 0; max-width: 720px;">
+                {{ 'If the queue worker stopped or a job timed out, the dashboard can still show this status while nothing is running. Use reset, then start again.'|t('burrow') }}
+                <form method="post" action="{{ actionUrl('burrow/settings/reset-backfill') }}" style="display: inline-block; margin-left: 8px;">
+                    {{ csrfInput() }}
+                    <button type="submit" class="btn">{{ 'Reset stuck backfill'|t('burrow') }}</button>
+                </form>
+            </p>
+        {% endif %}
         <form method="post" action="{{ actionUrl('burrow/settings/start-backfill') }}">
             {{ csrfInput() }}
             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">

@@ -5,6 +5,7 @@ use Craft;
 use craft\web\Controller;
 use yii\web\Response;
 
+use burrow\Burrow\jobs\CleanupOutboxRetentionJob;
 use burrow\Burrow\Plugin;
 
 class SettingsController extends Controller
@@ -306,20 +307,16 @@ class SettingsController extends Controller
         $requested = max(0, min(365, $requested));
 
         if ($requested === 0) {
-            $deleted = $plugin->getQueue()->cleanupSentAndFailed(0);
             $operations['outboxRetentionDays'] = $storedRetention;
             $integrationSettings['operations'] = $operations;
             $runtimeState['integrationSettings'] = $integrationSettings;
             $plugin->getState()->saveState($runtimeState);
 
-            $plugin->getLogs()->log('info', 'Outbox force-purged (retention save)', 'operations', 'system', null, [
-                'outboxRetentionDays' => $storedRetention,
-                'outboxPurgeAllSentAndFailed' => true,
-                'deletedRecords' => $deleted,
-            ]);
+            Craft::$app->getQueue()->push(new CleanupOutboxRetentionJob([
+                'forcePurge' => true,
+            ]));
 
-            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Purged {count} sent/failed outbox rows and reset the send dedupe index. Retention remains {days} days.', [
-                'count' => (string)$deleted,
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Outbox cleanup has been queued. All sent/failed rows and the send dedupe index will be cleared; retention remains {days} days. Large tables may take several minutes—check the queue if this does not finish.', [
                 'days' => (string)$storedRetention,
             ]));
             return $this->redirect('burrow/dashboard#data-backfill');
@@ -331,13 +328,12 @@ class SettingsController extends Controller
         $runtimeState['integrationSettings'] = $integrationSettings;
         $plugin->getState()->saveState($runtimeState);
 
-        $deleted = $plugin->getQueue()->cleanupSentAndFailed($retention);
-        $plugin->getLogs()->log('info', 'Operations settings updated', 'operations', 'system', null, [
-            'outboxRetentionDays' => $retention,
-            'deletedRecords' => $deleted,
-        ]);
+        Craft::$app->getQueue()->push(new CleanupOutboxRetentionJob([
+            'retentionDays' => $retention,
+            'forcePurge' => false,
+        ]));
 
-        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Outbox retention updated to {days} days.', [
+        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Outbox retention saved as {days} days. Old sent/failed rows are being removed in the queue; large cleanups may take several minutes.', [
             'days' => (string)$retention,
         ]));
         return $this->redirect('burrow/dashboard#data-backfill');
@@ -745,6 +741,45 @@ class SettingsController extends Controller
             ]));
         }
         return $this->redirect('burrow/settings?step=finish');
+    }
+
+    /**
+     * Clears a persisted `queued` / `running` backfill when the Craft queue is no longer processing it
+     * (worker stopped, timeout, deploy, etc.) so a new run can be started.
+     */
+    public function actionResetBackfill(): ?Response
+    {
+        $this->requirePostRequest();
+        $this->requirePermission('accessPlugin-burrow');
+
+        $plugin = Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $backfill = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
+        $status = (string)($backfill['status'] ?? '');
+
+        if ($status !== 'queued' && $status !== 'running') {
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'No active backfill to reset.'));
+            return $this->redirect('burrow/dashboard#data-backfill');
+        }
+
+        $backfill['status'] = 'failed';
+        $backfill['error'] = Craft::t('burrow', 'Backfill was reset from the dashboard because the run was no longer active in Craft’s queue (worker stopped, timeout, or deployment).');
+        $backfill['completedAt'] = gmdate('c');
+        unset($backfill['checkpoint']);
+
+        $integrationSettings['backfill'] = $backfill;
+        $runtimeState['integrationSettings'] = $integrationSettings;
+        $plugin->getState()->saveState($runtimeState);
+
+        $plugin->getLogs()->log('warning', 'Backfill reset from CP (stuck queued/running)', 'backfill', 'system', null, [
+            'previousStatus' => $status,
+            'accepted' => (int)($backfill['accepted'] ?? 0),
+            'requested' => (int)($backfill['requested'] ?? 0),
+        ]);
+
+        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Backfill state was reset. You can start a new run when ready.'));
+        return $this->redirect('burrow/dashboard#data-backfill');
     }
 
     public function actionStartBackfill(): ?Response

@@ -4,6 +4,15 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.6] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Added
+
+- **CleanupOutboxRetentionJob:** Saving outbox retention (including force purge with **0** days) now queues cleanup on Craft’s queue (15-minute TTR) instead of running large deletes during the CP request, avoiding PHP/web timeouts.
+- **Reset stuck backfill:** When backfill status is **Queued** or **Running** but no queue job is actually processing (worker stopped, timeout, deploy), the dashboard offers **Reset stuck backfill** to mark the run failed and allow a new start.
+
 ## [5.3.5] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

@@ -4,6 +4,14 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.7] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Commerce ecommerce backfill** now limits imported orders to those Craft Commerce considers **paid** (`OrderQuery::isPaid()`), so unpaid carts and abandoned checkouts are no longer sent as order backfill events. The paid-only filter is shared with the commerce probe used for discovery counts.
+
 ## [5.3.6] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

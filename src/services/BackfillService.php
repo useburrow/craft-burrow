@@ -792,6 +792,18 @@ class BackfillService extends Component
     }
 
     /**
+     * Restrict ecommerce backfill to orders Commerce treats as paid (see {@see \craft\commerce\elements\db\OrderQuery::isPaid()}).
+     *
+     * @param object $query Order element query from {@see \craft\commerce\elements\Order::find()}
+     */
+    private function applyPaidOnlyCommerceBackfillFilter(object $query): void
+    {
+        if (method_exists($query, 'isPaid')) {
+            $query->isPaid();
+        }
+    }
+
+    /**
      * @return array{events: array<int, array<string, mixed>>, nextOffset: int, exhausted: bool}
      */
     private function fetchEcommerceBackfillPage(array $runtimeState, string $windowStart, int $offset): array
@@ -805,9 +817,11 @@ class BackfillService extends Component
         $windowStartTs = strtotime($windowStart) ?: 0;
         $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
         try {
-            $orders = $orderClass::find()
+            $orderQuery = $orderClass::find()
                 ->status(null)
-                ->site('*')
+                ->site('*');
+            $this->applyPaidOnlyCommerceBackfillFilter($orderQuery);
+            $orders = $orderQuery
                 ->orderBy(['dateCreated' => SORT_DESC])
                 ->limit(self::BACKFILL_QUERY_BATCH)
                 ->offset($offset)
@@ -1738,8 +1752,9 @@ class BackfillService extends Component
             return ['available' => false, 'scanned' => 0, 'inWindow' => 0, 'samples' => []];
         }
         try {
-            $query = $orderClass::find()->status(null)->site('*')->orderBy(['dateCreated' => SORT_DESC]);
-            $orders = $query->limit(200)->all();
+            $query = $orderClass::find()->status(null)->site('*');
+            $this->applyPaidOnlyCommerceBackfillFilter($query);
+            $orders = $query->orderBy(['dateCreated' => SORT_DESC])->limit(200)->all();
         } catch (\Throwable $e) {
             return ['available' => true, 'error' => $e->getMessage(), 'scanned' => 0, 'inWindow' => 0, 'samples' => []];
         }
@@ -1764,7 +1779,7 @@ class BackfillService extends Component
             if ($normalizedStatus !== '' || $statusLabel !== '') {
                 $statusSignalPresent++;
             }
-            // Probe now mirrors native query-based eligibility: queried rows are what backfill will process.
+            // Probe mirrors backfill: paid orders only (see applyPaidOnlyCommerceBackfillFilter).
             $placedEligible++;
             $backfillEligible++;
             if (count($samples) < 5) {

@@ -822,6 +822,10 @@
                     Last backfill completed: {{ backfillMeta.accepted ?? 0 }} accepted, {{ backfillMeta.rejected ?? 0 }} rejected.
                 {% elseif backfillStatus == 'failed' %}
                     Last backfill failed. Open Dashboard to review and retry.
+                {% elseif backfillStatus == 'running' %}
+                    A backfill is running in the queue. Open Dashboard for live counts.
+                {% elseif backfillStatus == 'queued' %}
+                    A backfill is queued; ensure the queue worker is running.
                 {% else %}
                     Next step: run your first backfill in Dashboard to import historical forms and Craft Commerce orders.
                 {% endif %}

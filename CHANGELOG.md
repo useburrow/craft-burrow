@@ -4,6 +4,19 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.2] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Added
+
+- `BackfillChunkJob` — historical backfill runs through Craft’s queue in bounded chunks (configurable query pages per job) so long windows and all-time runs no longer rely on a single Control Panel HTTP request and are far less likely to hit timeouts.
+
+### Changed
+
+- Dashboard backfill action queues the first chunk job, shows **Queued** / **Running** status, blocks overlapping starts, and reminds operators to keep a queue worker running.
+- `forms.submission.received` events (live and backfill): tags emphasize the **form title** (`formName`); `properties.formId` is the numeric Craft form id instead of a provider prefix (`FF` / `FRM`), for clearer context in Burrow.
+
 ## [5.3.1] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

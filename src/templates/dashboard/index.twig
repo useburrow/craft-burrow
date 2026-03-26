@@ -27,6 +27,8 @@
         }
         .burrow-status-completed { background: #ecfdf5; color: #047857; border-color: #86efac; }
         .burrow-status-failed { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
+        .burrow-status-running { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
+        .burrow-status-queued { background: #f5f3ff; color: #5b21b6; border-color: #c4b5fd; }
         .burrow-status-idle { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
         .burrow-section { margin-top: 28px; }
     </style>
@@ -109,6 +111,10 @@
                 <span class="burrow-status-badge burrow-status-completed">Completed</span>
             {% elseif backfillStatus == 'failed' %}
                 <span class="burrow-status-badge burrow-status-failed">Failed</span>
+            {% elseif backfillStatus == 'running' %}
+                <span class="burrow-status-badge burrow-status-running">Running</span>
+            {% elseif backfillStatus == 'queued' %}
+                <span class="burrow-status-badge burrow-status-queued">Queued</span>
             {% else %}
                 <span class="burrow-status-badge burrow-status-idle">Idle</span>
             {% endif %}
@@ -139,7 +145,7 @@
                         </label>
                     {% endfor %}
                 {% endif %}
-                <button class="btn submit" {{ availableBackfillSources is empty ? 'disabled' : '' }}>Start Backfill</button>
+                <button class="btn submit" {{ (availableBackfillSources is empty or backfillStatus == 'queued' or backfillStatus == 'running') ? 'disabled' : '' }}>Start Backfill</button>
                 <a class="btn" href="{{ cpUrl('burrow/backfill-probe', { windowPreset: backfillState.windowPreset ?? 'last_90_days' }) }}">Backfill Probe</a>
             </div>
         </form>

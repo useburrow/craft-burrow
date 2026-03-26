@@ -739,52 +739,50 @@ class SettingsController extends Controller
         $request = Craft::$app->getRequest();
         $windowPreset = trim((string)$request->getBodyParam('backfillWindowPreset', 'last_30_days'));
         $sources = (array)$request->getBodyParam('backfillSources', []);
-        $result = $plugin->getBackfill()->runBackfill($runtimeState, $windowPreset, $sources);
 
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $existingBackfill = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
+        $existingStatus = (string)($existingBackfill['status'] ?? '');
+        if ($existingStatus === 'queued' || $existingStatus === 'running') {
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'A backfill is already running. Wait for it to finish or check the queue before starting another.'));
+            return $this->redirect('burrow/dashboard#data-backfill');
+        }
+
+        $checkpoint = $plugin->getBackfill()->createInitialCheckpoint($runtimeState, $windowPreset, $sources);
+        if ($checkpoint === null) {
+            $normalized = array_values(array_filter(array_map('strval', $sources)));
+            $normalized = array_values(array_intersect($normalized, ['forms', 'ecommerce']));
+            if ($normalized === []) {
+                Craft::$app->getSession()->setError(Craft::t('burrow', 'Choose at least one source for backfill.'));
+            } else {
+                Craft::$app->getSession()->setError(Craft::t('burrow', 'No backfill source is available for the selected integrations.'));
+            }
+            return $this->redirect('burrow/dashboard#data-backfill');
+        }
+
         $integrationSettings['backfill'] = [
-            'status' => $result['ok'] ? 'completed' : 'failed',
+            'status' => 'queued',
             'windowPreset' => $windowPreset,
-            'windowStart' => (string)$result['windowStart'],
-            'windowEnd' => (string)$result['windowEnd'],
-            'sources' => (array)$result['sources'],
-            'requested' => (int)$result['requested'],
-            'accepted' => (int)$result['accepted'],
-            'rejected' => (int)$result['rejected'],
-            'validationRejected' => (int)$result['validationRejected'],
-            'latestCursor' => (string)$result['latestCursor'],
-            'breakdown' => (array)$result['breakdown'],
+            'windowStart' => (string)$checkpoint['windowStart'],
+            'windowEnd' => (string)$checkpoint['windowEnd'],
+            'sources' => (array)$checkpoint['sources'],
+            'requested' => 0,
+            'accepted' => 0,
+            'rejected' => 0,
+            'validationRejected' => 0,
+            'latestCursor' => '',
+            'breakdown' => ['forms' => 0, 'ecommerce' => 0],
             'startedAt' => gmdate('c'),
-            'completedAt' => gmdate('c'),
-            'error' => (string)$result['error'],
+            'completedAt' => '',
+            'error' => '',
+            'checkpoint' => $checkpoint,
         ];
         $runtimeState['integrationSettings'] = $integrationSettings;
         $plugin->getState()->saveState($runtimeState);
 
-        if ($result['ok']) {
-            $plugin->getLogs()->log('info', 'Backfill completed', 'backfill', 'system', null, [
-                'requested' => $result['requested'],
-                'accepted' => $result['accepted'],
-                'rejected' => $result['rejected'],
-                'sources' => $result['sources'],
-                'windowStart' => $result['windowStart'],
-            ]);
-            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Backfill completed. Requested: {requested}, accepted: {accepted}, rejected: {rejected}.', [
-                'requested' => (string)$result['requested'],
-                'accepted' => (string)$result['accepted'],
-                'rejected' => (string)$result['rejected'],
-            ]));
-        } else {
-            $plugin->getLogs()->log('error', 'Backfill failed', 'backfill', 'system', null, [
-                'error' => $result['error'],
-                'sources' => $sources,
-                'windowPreset' => $windowPreset,
-            ]);
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Backfill failed: {error}', [
-                'error' => (string)$result['error'],
-            ]));
-        }
+        Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\BackfillChunkJob());
 
-        return $this->redirect('burrow/dashboard');
+        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Backfill queued. It will run via Craft’s queue in the background; keep your queue worker running until it finishes. Progress appears on this dashboard.'));
+        return $this->redirect('burrow/dashboard#data-backfill');
     }
 }

@@ -492,7 +492,8 @@ class BurrowApiService extends Component
         $externalEntityId = trim((string)($payload['externalEntityId'] ?? ('craft_order_' . $orderId)));
 
         try {
-            $events[] = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceOrderPlacedEvent([
+            $shippingMethod = trim((string)($tags['shippingMethod'] ?? ''));
+            $orderPlaced = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceOrderPlacedEvent([
                 'organizationId' => $organizationId,
                 'clientId' => $clientId,
                 'orderId' => $orderId,
@@ -506,7 +507,9 @@ class BurrowApiService extends Component
                 'timestamp' => trim((string)($payload['timestamp'] ?? $submittedAt)),
                 'externalEntityId' => $externalEntityId,
                 'tags' => $tags,
+                'shippingMethod' => $shippingMethod,
             ], $routing);
+            $events[] = $this->withEcommerceOrderPlacedShippingProperties($orderPlaced, $payload);
         } catch (\Throwable $e) {
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
@@ -976,6 +979,33 @@ class BurrowApiService extends Component
             ],
             'formsContracts' => array_values($formsContracts),
         ];
+    }
+
+    /**
+     * The SDK order.placed builder omits shipping from `properties` (only tax/subtotal). Burrow surfaces
+     * `properties` in activity UIs, so merge shipping totals and method here when the commerce payload supplies them.
+     *
+     * @param array<string,mixed> $envelope
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function withEcommerceOrderPlacedShippingProperties(array $envelope, array $payload): array
+    {
+        $props = is_array($envelope['properties'] ?? null) ? $envelope['properties'] : [];
+        if (array_key_exists('shipping', $payload)) {
+            $shipping = $payload['shipping'];
+            if (is_numeric($shipping)) {
+                $props['shippingTotal'] = (float)$shipping;
+            }
+        }
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        $method = trim((string)($tags['shippingMethod'] ?? ''));
+        if ($method !== '') {
+            $props['shippingMethod'] = $method;
+        }
+        $envelope['properties'] = $props;
+
+        return $envelope;
     }
 
     /**

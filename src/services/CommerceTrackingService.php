@@ -198,7 +198,7 @@ class CommerceTrackingService extends Component
             'timestamp' => $submittedAt,
             'subtotal' => $this->floatValue($order, ['itemSubtotal', 'subtotal']),
             'tax' => $this->floatValue($order, ['totalTax', 'taxTotal']),
-            'shipping' => $this->floatValue($order, ['totalShippingCost', 'adjustmentSubtotal']),
+            'shipping' => $this->floatValue($order, ['totalShippingCost']),
             'externalEntityId' => 'craft_order_' . $orderId,
             'customerToken' => $customerToken,
             'tags' => $tags,

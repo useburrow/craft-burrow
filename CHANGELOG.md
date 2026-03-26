@@ -4,6 +4,15 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.4] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- `ecommerce.order.placed` events now include **`shippingTotal`** and **`shippingMethod`** on `properties` (Burrow activity UIs that surface `properties` were missing them; the PHP SDK only emits tax/subtotal there by default). Commerce payloads already carried shipping in `tags` / internal fields but they were not merged into `properties`.
+- Commerce **shipping amount** is read from **`totalShippingCost`** only (removed `adjustmentSubtotal` fallback, which was not shipping-specific and could misreport totals). Applies to live order tracking and historical backfill.
+
 ## [5.3.3] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

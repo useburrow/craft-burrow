@@ -891,7 +891,7 @@ class BackfillService extends Component
                 'timestamp' => $submittedAt,
                 'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
                 'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
-                'shipping' => $this->objectFloatValue($order, ['totalShippingCost', 'adjustmentSubtotal']),
+                'shipping' => $this->objectFloatValue($order, ['totalShippingCost']),
                 'externalEntityId' => 'craft_order_' . $orderId,
                 'customerToken' => $customerToken,
                 'tags' => $tags,

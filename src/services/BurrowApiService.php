@@ -564,7 +564,7 @@ class BurrowApiService extends Component
             }
         }
 
-        return $events;
+        return array_map(fn(array $envelope): array => $this->withCraftPluginSource($envelope), $events);
     }
 
     /**
@@ -595,7 +595,7 @@ class BurrowApiService extends Component
         }
 
         try {
-            return \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceCartItemAddedEvent([
+            $envelope = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceCartItemAddedEvent([
                 'organizationId' => $organizationId,
                 'clientId' => $clientId,
                 'productId' => trim((string)($payload['productId'] ?? '')),
@@ -610,6 +610,8 @@ class BurrowApiService extends Component
                 'timestamp' => trim((string)($payload['timestamp'] ?? gmdate('c'))),
                 'tags' => $tags,
             ], $routing);
+
+            return $this->withCraftPluginSource($envelope);
         } catch (\Throwable $e) {
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
@@ -671,7 +673,7 @@ class BurrowApiService extends Component
         }
 
         try {
-            return $builderClass::{$builderMethod}([
+            $envelope = $builderClass::{$builderMethod}([
                 'organizationId' => $organizationId,
                 'clientId' => $clientId,
                 'productId' => trim((string)($payload['productId'] ?? '')),
@@ -686,6 +688,8 @@ class BurrowApiService extends Component
                 'timestamp' => trim((string)($payload['timestamp'] ?? gmdate('c'))),
                 'tags' => $tags,
             ], $routing);
+
+            return $this->withCraftPluginSource($envelope);
         } catch (\Throwable $e) {
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
@@ -727,11 +731,13 @@ class BurrowApiService extends Component
 
         if (method_exists($builderClass, $builderMethod)) {
             try {
-                return $builderClass::{$builderMethod}(array_merge($payload, [
+                $envelope = $builderClass::{$builderMethod}(array_merge($payload, [
                     'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
                     'clientId' => $this->resolveClientId($runtimeState),
                     'timestamp' => $timestamp,
                 ]), $routing);
+
+                return $this->withCraftPluginSource($envelope);
             } catch (\Throwable $e) {
                 \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                     'warning',
@@ -789,11 +795,13 @@ class BurrowApiService extends Component
 
         if (method_exists($builderClass, $builderMethod)) {
             try {
-                return $builderClass::{$builderMethod}(array_merge($payload, [
+                $envelope = $builderClass::{$builderMethod}(array_merge($payload, [
                     'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
                     'clientId' => $this->resolveClientId($runtimeState),
                     'timestamp' => $timestamp,
                 ]), $routing);
+
+                return $this->withCraftPluginSource($envelope);
             } catch (\Throwable $e) {
                 \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                     'warning',
@@ -848,11 +856,13 @@ class BurrowApiService extends Component
 
         if (method_exists($builderClass, $builderMethod)) {
             try {
-                return $builderClass::{$builderMethod}(array_merge($payload, [
+                $envelope = $builderClass::{$builderMethod}(array_merge($payload, [
                     'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
                     'clientId' => $this->resolveClientId($runtimeState),
                     'timestamp' => $timestamp,
                 ]), $routing);
+
+                return $this->withCraftPluginSource($envelope);
             } catch (\Throwable $e) {
                 \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                     'warning',
@@ -907,11 +917,13 @@ class BurrowApiService extends Component
 
         if (method_exists($builderClass, $builderMethod)) {
             try {
-                return $builderClass::{$builderMethod}(array_merge($payload, [
+                $envelope = $builderClass::{$builderMethod}(array_merge($payload, [
                     'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
                     'clientId' => $this->resolveClientId($runtimeState),
                     'timestamp' => $timestamp,
                 ]), $routing);
+
+                return $this->withCraftPluginSource($envelope);
             } catch (\Throwable $e) {
                 \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                     'warning',
@@ -964,6 +976,19 @@ class BurrowApiService extends Component
             ],
             'formsContracts' => array_values($formsContracts),
         ];
+    }
+
+    /**
+     * Shared PHP SDK canonical builders default `source` for WordPress; Craft must emit craft-plugin.
+     *
+     * @param array<string,mixed> $envelope
+     * @return array<string,mixed>
+     */
+    private function withCraftPluginSource(array $envelope): array
+    {
+        $envelope['source'] = 'craft-plugin';
+
+        return $envelope;
     }
 
     private function createClient(

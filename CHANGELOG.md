@@ -4,6 +4,17 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.1] - 2026-03-26
+
+### Fixed
+
+- SDK-built ecommerce envelopes (cart abandonment, cart/checkout funnel, order placed, line items, etc.) now set `source` to `craft-plugin` after canonical builders run, so payloads and Burrow UI no longer incorrectly show `wordpress-plugin` for Craft Commerce.
+
+### Changed
+
+- Historical backfill loads submissions and orders in fixed batches, streams events to the API in submit chunks, and avoids building a single giant in-memory event list (reduces PHP memory exhaustion on large datasets).
+- Backfill probe uses lightweight DB counts for form submission totals instead of materializing full event lists; ecommerce event counts still follow the same eligibility rules as backfill.
+
 ## [5.3.0] - 2026-03-25
 
 ### Added

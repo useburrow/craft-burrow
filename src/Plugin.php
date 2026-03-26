@@ -24,7 +24,7 @@ class Plugin extends CraftPlugin
 
     public static ?Plugin $plugin = null;
 
-    public string $schemaVersion = '5.3.0';
+    public string $schemaVersion = '5.3.1';
     public bool $hasCpSettings = true;
     public bool $hasCpSection = true;
 

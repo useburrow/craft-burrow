@@ -6,6 +6,10 @@ use craft\base\Component;
 
 class BackfillService extends Component
 {
+    private const BACKFILL_QUERY_BATCH = 200;
+
+    private const BACKFILL_SUBMIT_CHUNK = 400;
+
     /**
      * @param array<string,mixed> $runtimeState
      * @param array<int,string> $sources
@@ -20,24 +24,152 @@ class BackfillService extends Component
 
         $windowStart = $this->windowStartForPreset($windowPreset);
         $windowEnd = gmdate('c');
-        $events = [];
         $breakdown = [
             'forms' => 0,
             'ecommerce' => 0,
         ];
 
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $skippedDuplicates = 0;
+        $pendingKeys = [];
+        $pendingEvents = [];
+        $totalRequested = 0;
+        $totalAccepted = 0;
+        $totalRejected = 0;
+        $totalValidationRejected = 0;
+        $latestCursor = '';
+
+        $flushPending = function () use (
+            $plugin,
+            $runtimeState,
+            $windowStart,
+            $windowEnd,
+            &$pendingKeys,
+            &$pendingEvents,
+            &$totalRequested,
+            &$totalAccepted,
+            &$totalRejected,
+            &$totalValidationRejected,
+            &$latestCursor
+        ): bool {
+            if ($pendingEvents === []) {
+                return true;
+            }
+            $keys = $pendingKeys;
+            $events = $pendingEvents;
+            $pendingKeys = [];
+            $pendingEvents = [];
+            $sdkResult = $plugin->getBurrowApi()->submitBackfillEvents(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                $runtimeState,
+                $events,
+                $windowStart,
+                $windowEnd
+            );
+            if (!$sdkResult['ok']) {
+                foreach ($events as $index => $event) {
+                    if (!is_array($event)) {
+                        continue;
+                    }
+                    $plugin->getQueue()->markFailed(
+                        (string)($keys[$index] ?? $this->buildBackfillEventKey($event)),
+                        $event,
+                        (string)$sdkResult['error'],
+                        (string)($event['channel'] ?? ''),
+                        (string)($event['event'] ?? '')
+                    );
+                }
+
+                return false;
+            }
+            foreach ($events as $index => $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+                $plugin->getQueue()->markSent(
+                    (string)($keys[$index] ?? $this->buildBackfillEventKey($event)),
+                    $event,
+                    (string)($event['channel'] ?? ''),
+                    (string)($event['event'] ?? '')
+                );
+            }
+            $totalRequested += (int)($sdkResult['requestedCount'] ?? count($events));
+            $totalAccepted += (int)($sdkResult['acceptedCount'] ?? 0);
+            $totalRejected += (int)($sdkResult['rejectedCount'] ?? 0);
+            $totalValidationRejected += (int)($sdkResult['validationRejectedCount'] ?? 0);
+            $cursor = trim((string)($sdkResult['latestCursor'] ?? ''));
+            if ($cursor !== '') {
+                $latestCursor = $cursor;
+            }
+
+            return true;
+        };
+
         if (in_array('forms', $sources, true)) {
-            $formEvents = $this->buildFormsEvents($runtimeState, $windowStart);
-            $events = [...$events, ...$formEvents];
-            $breakdown['forms'] = count($formEvents);
+            foreach ($this->iterateFormsBackfillEvents($runtimeState, $windowStart) as $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+                $breakdown['forms']++;
+                $eventKey = $this->buildBackfillEventKey($event);
+                if ($plugin->getQueue()->wasSent($eventKey)) {
+                    $skippedDuplicates++;
+
+                    continue;
+                }
+                $pendingKeys[] = $eventKey;
+                $pendingEvents[] = $event;
+                if (count($pendingEvents) >= self::BACKFILL_SUBMIT_CHUNK && !$flushPending()) {
+                    return [
+                        'ok' => false,
+                        'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
+                        'windowStart' => $windowStart,
+                        'windowEnd' => $windowEnd,
+                        'sources' => $sources,
+                        'requested' => $totalRequested,
+                        'accepted' => $totalAccepted + $skippedDuplicates,
+                        'rejected' => $totalRejected,
+                        'validationRejected' => $totalValidationRejected,
+                        'latestCursor' => $latestCursor,
+                        'breakdown' => $breakdown,
+                    ];
+                }
+            }
         }
         if (in_array('ecommerce', $sources, true)) {
-            $ecommerceEvents = $this->buildEcommerceEvents($runtimeState, $windowStart);
-            $events = [...$events, ...$ecommerceEvents];
-            $breakdown['ecommerce'] = count($ecommerceEvents);
+            foreach ($this->iterateEcommerceBackfillEvents($runtimeState, $windowStart) as $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+                $breakdown['ecommerce']++;
+                $eventKey = $this->buildBackfillEventKey($event);
+                if ($plugin->getQueue()->wasSent($eventKey)) {
+                    $skippedDuplicates++;
+
+                    continue;
+                }
+                $pendingKeys[] = $eventKey;
+                $pendingEvents[] = $event;
+                if (count($pendingEvents) >= self::BACKFILL_SUBMIT_CHUNK && !$flushPending()) {
+                    return [
+                        'ok' => false,
+                        'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
+                        'windowStart' => $windowStart,
+                        'windowEnd' => $windowEnd,
+                        'sources' => $sources,
+                        'requested' => $totalRequested,
+                        'accepted' => $totalAccepted + $skippedDuplicates,
+                        'rejected' => $totalRejected,
+                        'validationRejected' => $totalValidationRejected,
+                        'latestCursor' => $latestCursor,
+                        'breakdown' => $breakdown,
+                    ];
+                }
+            }
         }
 
-        if (empty($events)) {
+        if (($breakdown['forms'] + $breakdown['ecommerce']) === 0) {
             $debug = $this->buildDiscoveryDebug($runtimeState, $sources, $windowStart);
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
@@ -56,26 +188,27 @@ class BackfillService extends Component
                 . ', commerceMode=' . (string)($debug['commerceMode'] ?? 'unknown')
                 . ', commerceScanned=' . (string)($debug['commerceScanned'] ?? 0)
                 . ', commerceInWindow=' . (string)($debug['commerceInWindow'] ?? 0);
+
             return $this->errorResult('No historical events found for the selected window and sources. [' . $summary . ']');
         }
 
-        $plugin = \burrow\Burrow\Plugin::getInstance();
-        $eventKeys = [];
-        $pendingEvents = [];
-        $skippedDuplicates = 0;
-        foreach ($events as $event) {
-            if (!is_array($event)) {
-                continue;
-            }
-            $eventKey = $this->buildBackfillEventKey($event);
-            if ($plugin->getQueue()->wasSent($eventKey)) {
-                $skippedDuplicates++;
-                continue;
-            }
-            $eventKeys[] = $eventKey;
-            $pendingEvents[] = $event;
+        if (!$flushPending()) {
+            return [
+                'ok' => false,
+                'error' => 'Backfill submit failed on final chunk.',
+                'windowStart' => $windowStart,
+                'windowEnd' => $windowEnd,
+                'sources' => $sources,
+                'requested' => $totalRequested,
+                'accepted' => $totalAccepted + $skippedDuplicates,
+                'rejected' => $totalRejected,
+                'validationRejected' => $totalValidationRejected,
+                'latestCursor' => $latestCursor,
+                'breakdown' => $breakdown,
+            ];
         }
-        if (empty($pendingEvents)) {
+
+        if ($totalRequested === 0 && $skippedDuplicates > 0) {
             return [
                 'ok' => true,
                 'error' => '',
@@ -83,59 +216,12 @@ class BackfillService extends Component
                 'windowEnd' => $windowEnd,
                 'sources' => $sources,
                 'requested' => 0,
-                'accepted' => 0,
+                'accepted' => $skippedDuplicates,
                 'rejected' => 0,
                 'validationRejected' => 0,
                 'latestCursor' => '',
                 'breakdown' => $breakdown,
             ];
-        }
-        $sdkResult = $plugin->getBurrowApi()->submitBackfillEvents(
-            $plugin->getBurrowBaseUrl(),
-            $plugin->getBurrowApiKey(),
-            $runtimeState,
-            $pendingEvents,
-            $windowStart,
-            $windowEnd
-        );
-        if (!$sdkResult['ok']) {
-            foreach ($pendingEvents as $index => $event) {
-                if (!is_array($event)) {
-                    continue;
-                }
-                $plugin->getQueue()->markFailed(
-                    (string)($eventKeys[$index] ?? $this->buildBackfillEventKey($event)),
-                    $event,
-                    (string)$sdkResult['error'],
-                    (string)($event['channel'] ?? ''),
-                    (string)($event['event'] ?? '')
-                );
-            }
-            return [
-                'ok' => false,
-                'error' => (string)$sdkResult['error'],
-                'windowStart' => $windowStart,
-                'windowEnd' => $windowEnd,
-                'sources' => $sources,
-                'requested' => count($pendingEvents),
-                'accepted' => 0,
-                'rejected' => 0,
-                'validationRejected' => 0,
-                'latestCursor' => '',
-                'breakdown' => $breakdown,
-            ];
-        }
-
-        foreach ($pendingEvents as $index => $event) {
-            if (!is_array($event)) {
-                continue;
-            }
-            $plugin->getQueue()->markSent(
-                (string)($eventKeys[$index] ?? $this->buildBackfillEventKey($event)),
-                $event,
-                (string)($event['channel'] ?? ''),
-                (string)($event['event'] ?? '')
-            );
         }
 
         return [
@@ -144,11 +230,11 @@ class BackfillService extends Component
             'windowStart' => $windowStart,
             'windowEnd' => $windowEnd,
             'sources' => $sources,
-            'requested' => (int)($sdkResult['requestedCount'] ?? count($pendingEvents)),
-            'accepted' => (int)($sdkResult['acceptedCount'] ?? 0) + $skippedDuplicates,
-            'rejected' => (int)($sdkResult['rejectedCount'] ?? 0),
-            'validationRejected' => (int)($sdkResult['validationRejectedCount'] ?? 0),
-            'latestCursor' => trim((string)($sdkResult['latestCursor'] ?? '')),
+            'requested' => $totalRequested,
+            'accepted' => $totalAccepted + $skippedDuplicates,
+            'rejected' => $totalRejected,
+            'validationRejected' => $totalValidationRejected,
+            'latestCursor' => $latestCursor,
             'breakdown' => $breakdown,
         ];
     }
@@ -177,9 +263,6 @@ class BackfillService extends Component
         $windowStart = $this->windowStartForPreset($windowPreset);
         $windowStartTs = strtotime($windowStart) ?: 0;
 
-        $formsEvents = $this->buildFormsEvents($runtimeState, $windowStart);
-        $ecommerceEvents = $this->buildEcommerceEvents($runtimeState, $windowStart);
-
         $freeform = $this->probeFreeformSubmissions($windowStartTs);
         $formie = $this->probeFormieSubmissions($windowStartTs);
         $commerce = $this->probeCommerceOrders($windowStartTs);
@@ -199,8 +282,8 @@ class BackfillService extends Component
             ],
             'availableSources' => $this->availableSources($runtimeState),
             'eventCounts' => [
-                'forms' => count($formsEvents),
-                'ecommerce' => count($ecommerceEvents),
+                'forms' => $this->countFormsBackfillEvents($runtimeState, $windowStart),
+                'ecommerce' => $this->countEcommerceBackfillEvents($runtimeState, $windowStart),
             ],
             'freeform' => $freeform,
             'formie' => $formie,
@@ -254,29 +337,409 @@ class BackfillService extends Component
 
     /**
      * @param array<string,mixed> $runtimeState
-     * @return array<int,array<string,mixed>>
+     * @return \Generator<int, array<string, mixed>>
      */
-    private function buildFormsEvents(array $runtimeState, string $windowStart): array
+    private function iterateFormsBackfillEvents(array $runtimeState, string $windowStart): \Generator
     {
-        $events = [];
-        $events = [...$events, ...$this->buildFreeformSubmissionEvents($runtimeState, $windowStart)];
-        $events = [...$events, ...$this->buildFormieSubmissionEvents($runtimeState, $windowStart)];
-
-        return $events;
+        yield from $this->iterateFreeformSubmissionEvents($runtimeState, $windowStart);
+        yield from $this->iterateFormieSubmissionEvents($runtimeState, $windowStart);
     }
 
     /**
      * @param array<string,mixed> $runtimeState
-     * @return array<int,array<string,mixed>>
+     * @return \Generator<int, array<string, mixed>>
      */
-    private function buildFreeformSubmissionEvents(array $runtimeState, string $windowStart): array
+    private function iterateFreeformSubmissionEvents(array $runtimeState, string $windowStart): \Generator
+    {
+        $ctx = $this->prepareFreeformBackfillContext($runtimeState);
+        if ($ctx === null) {
+            return;
+        }
+        /** @var class-string<\craft\base\ElementInterface> $submissionClass */
+        $submissionClass = $ctx['submissionClass'];
+        $enabledFormIdMap = $ctx['enabledFormIdMap'];
+        $formNames = $ctx['formNames'];
+        $formConfigsById = $ctx['formConfigsById'];
+        $windowStartTs = strtotime($windowStart) ?: 0;
+        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
+        $offset = 0;
+        while (true) {
+            try {
+                $rows = $submissionClass::find()
+                    ->status(null)
+                    ->site('*')
+                    ->orderBy(['dateCreated' => SORT_DESC])
+                    ->limit(self::BACKFILL_QUERY_BATCH)
+                    ->offset($offset)
+                    ->all();
+            } catch (\Throwable) {
+                return;
+            }
+            if ($rows === []) {
+                return;
+            }
+            $oldestTsInBatch = \PHP_INT_MAX;
+            foreach ($rows as $row) {
+                if (!is_object($row)) {
+                    continue;
+                }
+                $formId = $this->extractSubmissionFormId($row);
+                if ($formId <= 0 || !isset($enabledFormIdMap[$formId])) {
+                    continue;
+                }
+                $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
+                if ($timestamp === '') {
+                    continue;
+                }
+                $submittedTs = strtotime($timestamp) ?: 0;
+                $oldestTsInBatch = min($oldestTsInBatch, $submittedTs);
+                if ($submittedTs < $windowStartTs) {
+                    continue;
+                }
+                $submissionId = $this->objectStringValue($row, ['id']);
+                $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'freeform', 'FF') . max(0, $formId);
+                $baseTags = [
+                    'provider' => 'freeform',
+                    'formId' => $prefixedFormId,
+                ];
+                $baseProperties = [
+                    'provider' => 'freeform',
+                    'formId' => $prefixedFormId,
+                    'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
+                    'submissionId' => $submissionId,
+                    'submittedAt' => $timestamp,
+                    'isBackfill' => true,
+                ];
+                $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
+                $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
+                if ($mode === 'custom_fields') {
+                    $submissionPayload = $this->extractSubmissionScalarValues($row);
+                    if (!empty($submissionPayload)) {
+                        $baseProperties = array_merge($submissionPayload, $baseProperties);
+                    }
+                    $mapped = $this->extractMappedSubmissionPayload($row, is_array($formConfig['fields'] ?? null) ? $formConfig['fields'] : []);
+                    if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
+                        $baseTags = array_merge($baseTags, $mapped['tags']);
+                    }
+                    if (!empty($mapped['properties']) && is_array($mapped['properties'])) {
+                        $baseProperties = array_merge($baseProperties, $mapped['properties']);
+                    }
+                }
+                $event = $api->buildFormsSubmissionEvent($runtimeState, [
+                    'timestamp' => $timestamp,
+                    'source' => 'craft-freeform',
+                    'tags' => $baseTags,
+                    'properties' => $baseProperties,
+                ]);
+                if (!empty($event)) {
+                    yield $event;
+                }
+            }
+            if ($oldestTsInBatch < $windowStartTs) {
+                return;
+            }
+            $offset += self::BACKFILL_QUERY_BATCH;
+            unset($rows);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @return \Generator<int, array<string, mixed>>
+     */
+    private function iterateFormieSubmissionEvents(array $runtimeState, string $windowStart): \Generator
+    {
+        $ctx = $this->prepareFormieBackfillContext($runtimeState);
+        if ($ctx === null) {
+            return;
+        }
+        /** @var class-string<\craft\base\ElementInterface> $submissionClass */
+        $submissionClass = $ctx['submissionClass'];
+        $selectedFormIdMap = $ctx['selectedFormIdMap'];
+        $formNames = $ctx['formNames'];
+        $windowStartTs = strtotime($windowStart) ?: 0;
+        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
+        $offset = 0;
+        while (true) {
+            try {
+                $rows = $submissionClass::find()
+                    ->status(null)
+                    ->site('*')
+                    ->orderBy(['dateCreated' => SORT_DESC])
+                    ->limit(self::BACKFILL_QUERY_BATCH)
+                    ->offset($offset)
+                    ->all();
+            } catch (\Throwable) {
+                return;
+            }
+            if ($rows === []) {
+                return;
+            }
+            $oldestTsInBatch = \PHP_INT_MAX;
+            foreach ($rows as $row) {
+                if (!is_object($row)) {
+                    continue;
+                }
+                $formId = $this->extractSubmissionFormId($row);
+                if ($formId <= 0 || !isset($selectedFormIdMap[$formId])) {
+                    continue;
+                }
+                $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
+                if ($timestamp === '') {
+                    continue;
+                }
+                $submittedTs = strtotime($timestamp) ?: 0;
+                $oldestTsInBatch = min($oldestTsInBatch, $submittedTs);
+                if ($submittedTs < $windowStartTs) {
+                    continue;
+                }
+                $submissionId = $this->objectStringValue($row, ['id']);
+                $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'formie', 'FRM') . max(0, $formId);
+                $baseProperties = [
+                    'provider' => 'formie',
+                    'formId' => $prefixedFormId,
+                    'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
+                    'submissionId' => $submissionId,
+                    'submittedAt' => $timestamp,
+                    'isBackfill' => true,
+                ];
+                $event = $api->buildFormsSubmissionEvent($runtimeState, [
+                    'timestamp' => $timestamp,
+                    'source' => 'craft-formie',
+                    'tags' => [
+                        'provider' => 'formie',
+                        'formId' => $prefixedFormId,
+                    ],
+                    'properties' => $baseProperties,
+                ]);
+                if (!empty($event)) {
+                    yield $event;
+                }
+            }
+            if ($oldestTsInBatch < $windowStartTs) {
+                return;
+            }
+            $offset += self::BACKFILL_QUERY_BATCH;
+            unset($rows);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @return \Generator<int, array<string, mixed>>
+     */
+    private function iterateEcommerceBackfillEvents(array $runtimeState, string $windowStart): \Generator
+    {
+        $orderClass = '\craft\commerce\elements\Order';
+        if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
+            return;
+        }
+
+        $windowStartTs = strtotime($windowStart) ?: 0;
+        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
+        $offset = 0;
+        while (true) {
+            try {
+                $orders = $orderClass::find()
+                    ->status(null)
+                    ->site('*')
+                    ->orderBy(['dateCreated' => SORT_DESC])
+                    ->limit(self::BACKFILL_QUERY_BATCH)
+                    ->offset($offset)
+                    ->all();
+            } catch (\Throwable) {
+                return;
+            }
+            if ($orders === []) {
+                return;
+            }
+            foreach ($orders as $order) {
+                if (!is_object($order)) {
+                    continue;
+                }
+                $submittedAt = $this->normalizeTimestamp($this->objectDateValue($order, ['dateOrdered', 'datePaid', 'dateAuthorized', 'dateCreated']));
+                if ($submittedAt === '') {
+                    continue;
+                }
+                $submittedTs = strtotime($submittedAt) ?: 0;
+                if ($submittedTs < $windowStartTs) {
+                    continue;
+                }
+                $orderId = $this->extractCommerceOrderIdentifier($order);
+                if ($orderId === '') {
+                    continue;
+                }
+                $orderReference = $this->objectStringValue($order, ['reference', 'shortNumber']);
+                $orderLookupNumber = $this->objectStringValue($order, ['number', 'id']);
+                $currency = $this->objectStringValue($order, ['paymentCurrency', 'currency']) ?: 'USD';
+                $items = $this->extractCommerceLineItemsFromOrderElement($order);
+                $orderTotal = $this->extractCommerceOrderTotal($order);
+                $itemCount = count($items);
+                if ($itemCount <= 0) {
+                    $itemCount = max(0, (int)round($this->objectFloatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+                }
+                $shippingMethod = $this->extractCommerceShippingMethod($order);
+                $shippingAddress = $this->extractCommerceShippingAddress($order);
+                $paymentMethod = $this->extractCommercePaymentMethod($order);
+                $customerToken = $this->extractCommerceCustomerToken($order);
+                $isGuest = $this->extractCommerceIsGuest($order);
+                $couponCode = $this->objectStringValue($order, ['couponCode']);
+
+                $tags = [
+                    'provider' => 'craft-commerce',
+                    'currency' => $currency,
+                ];
+                if ($orderReference !== '') {
+                    $tags['orderReference'] = $orderReference;
+                }
+                if ($orderLookupNumber !== '') {
+                    $tags['orderLookupNumber'] = $orderLookupNumber;
+                }
+                if ($shippingMethod !== '') {
+                    $tags['shippingMethod'] = $shippingMethod;
+                }
+                if ($shippingAddress['country'] !== '') {
+                    $tags['shippingCountry'] = $shippingAddress['country'];
+                }
+                if ($shippingAddress['region'] !== '') {
+                    $tags['shippingRegion'] = $shippingAddress['region'];
+                }
+                if ($paymentMethod !== '') {
+                    $tags['paymentMethod'] = $paymentMethod;
+                }
+                if ($customerToken !== '') {
+                    $tags['customerToken'] = $customerToken;
+                }
+                if ($isGuest !== '') {
+                    $tags['isGuest'] = $isGuest;
+                }
+                if ($couponCode !== '') {
+                    $tags['couponCode'] = $couponCode;
+                }
+
+                $built = $api->buildEcommerceOrderAndItemEvents($runtimeState, [
+                    'orderId' => $orderId,
+                    'orderTotal' => $orderTotal,
+                    'currency' => $currency,
+                    'itemCount' => $itemCount,
+                    'submittedAt' => $submittedAt,
+                    'timestamp' => $submittedAt,
+                    'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
+                    'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
+                    'shipping' => $this->objectFloatValue($order, ['totalShippingCost', 'adjustmentSubtotal']),
+                    'externalEntityId' => 'craft_order_' . $orderId,
+                    'customerToken' => $customerToken,
+                    'tags' => $tags,
+                    'items' => $items,
+                ]);
+                if (!empty($built)) {
+                    foreach ($built as $ev) {
+                        if (is_array($ev) && $ev !== []) {
+                            yield $ev;
+                        }
+                    }
+                } else {
+                    \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                        'warning',
+                        'Commerce order envelope build returned no events during backfill',
+                        'backfill',
+                        'ecommerce',
+                        null,
+                        [
+                            'orderId' => $orderId,
+                            'orderTotal' => $orderTotal,
+                            'itemCount' => $itemCount,
+                            'submittedAt' => $submittedAt,
+                            'currency' => $currency,
+                        ]
+                    );
+                }
+            }
+            $offset += self::BACKFILL_QUERY_BATCH;
+            unset($orders);
+        }
+    }
+
+    private function countFormsBackfillEvents(array $runtimeState, string $windowStart): int
+    {
+        return $this->countFreeformBackfillSubmissions($runtimeState, $windowStart)
+            + $this->countFormieBackfillSubmissions($runtimeState, $windowStart);
+    }
+
+    private function countFreeformBackfillSubmissions(array $runtimeState, string $windowStart): int
+    {
+        $ctx = $this->prepareFreeformBackfillContext($runtimeState);
+        if ($ctx === null) {
+            return 0;
+        }
+        /** @var class-string<\craft\base\ElementInterface> $submissionClass */
+        $submissionClass = $ctx['submissionClass'];
+        $formIds = array_map('intval', array_keys($ctx['enabledFormIdMap']));
+        if ($formIds === []) {
+            return 0;
+        }
+        try {
+            return (int)$submissionClass::find()
+                ->status(null)
+                ->site('*')
+                ->formId($formIds)
+                ->dateCreated('>= ' . $windowStart)
+                ->count();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    private function countFormieBackfillSubmissions(array $runtimeState, string $windowStart): int
+    {
+        $ctx = $this->prepareFormieBackfillContext($runtimeState);
+        if ($ctx === null) {
+            return 0;
+        }
+        /** @var class-string<\craft\base\ElementInterface> $submissionClass */
+        $submissionClass = $ctx['submissionClass'];
+        $formIds = array_map('intval', array_keys($ctx['selectedFormIdMap']));
+        if ($formIds === []) {
+            return 0;
+        }
+        try {
+            return (int)$submissionClass::find()
+                ->status(null)
+                ->site('*')
+                ->formId($formIds)
+                ->dateCreated('>= ' . $windowStart)
+                ->count();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    private function countEcommerceBackfillEvents(array $runtimeState, string $windowStart): int
+    {
+        $n = 0;
+        foreach ($this->iterateEcommerceBackfillEvents($runtimeState, $windowStart) as $_) {
+            $n++;
+        }
+
+        return $n;
+    }
+
+    /**
+     * @return null|array{
+     *     submissionClass: class-string,
+     *     enabledFormIdMap: array<int, bool>,
+     *     formNames: array<int, string>,
+     *     formConfigsById: array<int, array<string, mixed>>
+     * }
+     */
+    private function prepareFreeformBackfillContext(array $runtimeState): ?array
     {
         $config = is_array($runtimeState['integrationSettings']['freeform']['forms'] ?? null)
             ? $runtimeState['integrationSettings']['freeform']['forms']
             : [];
         $submissionClass = '\Solspace\Freeform\Elements\Submission';
         if (!class_exists($submissionClass) || !method_exists($submissionClass, 'find')) {
-            return [];
+            return null;
         }
 
         $enabledFormIds = [];
@@ -316,122 +779,47 @@ class BackfillService extends Component
             $formNames[$intFormId] = $configName !== '' ? $configName : ($liveFreeformNames[$intFormId] ?? ('Form ' . $stringFormId));
             $formConfigsById[$intFormId] = $formConfig;
         }
-        if (empty($enabledFormIds)) {
+        if ($enabledFormIds === []) {
             foreach ($liveFreeformNames as $id => $name) {
                 $enabledFormIds[] = $id;
                 $formNames[$id] = $name;
             }
             $enabledFormIds = array_values(array_unique($enabledFormIds));
         }
-        $enabledFormIdMap = array_fill_keys($enabledFormIds, true);
-        $windowStartTs = strtotime($windowStart) ?: 0;
-        try {
-            $rows = $submissionClass::find()
-                ->status(null)
-                ->site('*')
-                ->orderBy(['dateCreated' => SORT_DESC])
-                ->limit(null)
-                ->all();
-        } catch (\Throwable) {
-            return [];
+        if ($enabledFormIds === []) {
+            return null;
         }
 
-        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
-        $events = [];
-        foreach ($rows as $row) {
-            if (!is_object($row)) {
-                continue;
-            }
-            $formId = $this->extractSubmissionFormId($row);
-            if ($formId <= 0 || !isset($enabledFormIdMap[$formId])) {
-                continue;
-            }
-            $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
-            if ($timestamp === '') {
-                continue;
-            }
-            $submittedTs = strtotime($timestamp) ?: 0;
-            if ($submittedTs < $windowStartTs) {
-                continue;
-            }
-            $submissionId = $this->objectStringValue($row, ['id']);
-            $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'freeform', 'FF') . max(0, $formId);
-            $baseTags = [
-                'provider' => 'freeform',
-                'formId' => $prefixedFormId,
-            ];
-            $baseProperties = [
-                'provider' => 'freeform',
-                'formId' => $prefixedFormId,
-                'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
-                'submissionId' => $submissionId,
-                'submittedAt' => $timestamp,
-                'isBackfill' => true,
-            ];
-            $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
-            $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
-            if ($mode === 'custom_fields') {
-                $submissionPayload = $this->extractSubmissionScalarValues($row);
-                if (!empty($submissionPayload)) {
-                    $baseProperties = array_merge($submissionPayload, $baseProperties);
-                }
-                $mapped = $this->extractMappedSubmissionPayload($row, is_array($formConfig['fields'] ?? null) ? $formConfig['fields'] : []);
-                if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
-                    $baseTags = array_merge($baseTags, $mapped['tags']);
-                }
-                if (!empty($mapped['properties']) && is_array($mapped['properties'])) {
-                    $baseProperties = array_merge($baseProperties, $mapped['properties']);
-                }
-            }
-            $event = $api->buildFormsSubmissionEvent($runtimeState, [
-                'timestamp' => $timestamp,
-                'source' => 'craft-freeform',
-                'tags' => $baseTags,
-                'properties' => $baseProperties,
-            ]);
-            if (!empty($event)) {
-                $events[] = $event;
-            }
-        }
-
-        return $events;
+        return [
+            'submissionClass' => $submissionClass,
+            'enabledFormIdMap' => array_fill_keys($enabledFormIds, true),
+            'formNames' => $formNames,
+            'formConfigsById' => $formConfigsById,
+        ];
     }
 
     /**
-     * @param array<string,mixed> $runtimeState
-     * @return array<int,array<string,mixed>>
+     * @return null|array{
+     *     submissionClass: class-string,
+     *     selectedFormIdMap: array<int, bool>,
+     *     formNames: array<int, string>
+     * }
      */
-    private function buildFormieSubmissionEvents(array $runtimeState, string $windowStart): array
+    private function prepareFormieBackfillContext(array $runtimeState): ?array
     {
         $config = is_array($runtimeState['integrationSettings']['formie'] ?? null)
             ? $runtimeState['integrationSettings']['formie']
             : [];
         $mode = trim((string)($config['mode'] ?? 'count_only'));
         if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
-            return [];
-        }
-        if ($mode === 'custom_fields') {
-            // Formie custom field mapping is not implemented yet; treat as count-only.
-            $mode = 'count_only';
+            return null;
         }
         $submissionClass = '\verbb\formie\elements\Submission';
         if (!class_exists($submissionClass) || !method_exists($submissionClass, 'find')) {
-            return [];
+            return null;
         }
 
         $selectedFormIds = array_values(array_filter(array_map('intval', (array)($config['formIds'] ?? []))));
-        $windowStartTs = strtotime($windowStart) ?: 0;
-        try {
-            $rows = $submissionClass::find()
-                ->status(null)
-                ->site('*')
-                ->orderBy(['dateCreated' => SORT_DESC])
-                ->limit(null)
-                ->all();
-        } catch (\Throwable) {
-            return [];
-        }
-
         $formNames = [];
         foreach (\burrow\Burrow\Plugin::getInstance()->getIntegrations()->getFormieForms() as $form) {
             if (!is_array($form)) {
@@ -443,187 +831,18 @@ class BackfillService extends Component
             }
             $formNames[$id] = (string)($form['name'] ?? ('Form ' . $id));
         }
-        if (empty($selectedFormIds) && !empty($formNames)) {
+        if ($selectedFormIds === [] && $formNames !== []) {
             $selectedFormIds = array_keys($formNames);
         }
-        if (empty($selectedFormIds)) {
-            return [];
-        }
-        $selectedFormIdMap = array_fill_keys($selectedFormIds, true);
-
-        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
-        $events = [];
-        foreach ($rows as $row) {
-            if (!is_object($row)) {
-                continue;
-            }
-            $formId = $this->extractSubmissionFormId($row);
-            if ($formId <= 0 || !isset($selectedFormIdMap[$formId])) {
-                continue;
-            }
-            $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
-            if ($timestamp === '') {
-                continue;
-            }
-            $submittedTs = strtotime($timestamp) ?: 0;
-            if ($submittedTs < $windowStartTs) {
-                continue;
-            }
-            $submissionId = $this->objectStringValue($row, ['id']);
-            $prefixedFormId = $this->resolveProviderPrefix($runtimeState, 'formie', 'FRM') . max(0, $formId);
-            $baseProperties = [
-                'provider' => 'formie',
-                'formId' => $prefixedFormId,
-                'formName' => (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form')),
-                'submissionId' => $submissionId,
-                'submittedAt' => $timestamp,
-                'isBackfill' => true,
-            ];
-            $event = $api->buildFormsSubmissionEvent($runtimeState, [
-                'timestamp' => $timestamp,
-                'source' => 'craft-formie',
-                'tags' => [
-                    'provider' => 'formie',
-                    'formId' => $prefixedFormId,
-                ],
-                'properties' => $baseProperties,
-            ]);
-            if (!empty($event)) {
-                $events[] = $event;
-            }
+        if ($selectedFormIds === []) {
+            return null;
         }
 
-        return $events;
-    }
-
-    /**
-     * @param array<string,mixed> $runtimeState
-     * @return array<int,array<string,mixed>>
-     */
-    private function buildEcommerceEvents(array $runtimeState, string $windowStart): array
-    {
-        $orderClass = '\craft\commerce\elements\Order';
-        if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
-            return [];
-        }
-
-        $windowStartTs = strtotime($windowStart) ?: 0;
-
-        try {
-            $query = $orderClass::find()
-                ->status(null)
-                ->site('*')
-                ->orderBy(['dateCreated' => SORT_DESC]);
-            $orders = $query->limit(null)->all();
-        } catch (\Throwable) {
-            return [];
-        }
-        if (empty($orders)) {
-            return [];
-        }
-
-        $events = [];
-        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
-        foreach ($orders as $order) {
-            if (!is_object($order)) {
-                continue;
-            }
-            $submittedAt = $this->normalizeTimestamp($this->objectDateValue($order, ['dateOrdered', 'datePaid', 'dateAuthorized', 'dateCreated']));
-            if ($submittedAt === '') {
-                continue;
-            }
-            $submittedTs = strtotime($submittedAt) ?: 0;
-            if ($submittedTs < $windowStartTs) {
-                continue;
-            }
-            $orderId = $this->extractCommerceOrderIdentifier($order);
-            if ($orderId === '') {
-                continue;
-            }
-            $orderReference = $this->objectStringValue($order, ['reference', 'shortNumber']);
-            $orderLookupNumber = $this->objectStringValue($order, ['number', 'id']);
-            $currency = $this->objectStringValue($order, ['paymentCurrency', 'currency']) ?: 'USD';
-            $items = $this->extractCommerceLineItemsFromOrderElement($order);
-            $orderTotal = $this->extractCommerceOrderTotal($order);
-            $itemCount = count($items);
-            if ($itemCount <= 0) {
-                $itemCount = max(0, (int)round($this->objectFloatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
-            }
-            $shippingMethod = $this->extractCommerceShippingMethod($order);
-            $shippingAddress = $this->extractCommerceShippingAddress($order);
-            $paymentMethod = $this->extractCommercePaymentMethod($order);
-            $customerToken = $this->extractCommerceCustomerToken($order);
-            $isGuest = $this->extractCommerceIsGuest($order);
-            $couponCode = $this->objectStringValue($order, ['couponCode']);
-
-            $tags = [
-                'provider' => 'craft-commerce',
-                'currency' => $currency,
-            ];
-            if ($orderReference !== '') {
-                $tags['orderReference'] = $orderReference;
-            }
-            if ($orderLookupNumber !== '') {
-                $tags['orderLookupNumber'] = $orderLookupNumber;
-            }
-            if ($shippingMethod !== '') {
-                $tags['shippingMethod'] = $shippingMethod;
-            }
-            if ($shippingAddress['country'] !== '') {
-                $tags['shippingCountry'] = $shippingAddress['country'];
-            }
-            if ($shippingAddress['region'] !== '') {
-                $tags['shippingRegion'] = $shippingAddress['region'];
-            }
-            if ($paymentMethod !== '') {
-                $tags['paymentMethod'] = $paymentMethod;
-            }
-            if ($customerToken !== '') {
-                $tags['customerToken'] = $customerToken;
-            }
-            if ($isGuest !== '') {
-                $tags['isGuest'] = $isGuest;
-            }
-            if ($couponCode !== '') {
-                $tags['couponCode'] = $couponCode;
-            }
-
-            $built = $api->buildEcommerceOrderAndItemEvents($runtimeState, [
-                'orderId' => $orderId,
-                'orderTotal' => $orderTotal,
-                'currency' => $currency,
-                'itemCount' => $itemCount,
-                'submittedAt' => $submittedAt,
-                'timestamp' => $submittedAt,
-                'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
-                'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
-                'shipping' => $this->objectFloatValue($order, ['totalShippingCost', 'adjustmentSubtotal']),
-                'externalEntityId' => 'craft_order_' . $orderId,
-                'customerToken' => $customerToken,
-                'tags' => $tags,
-                'items' => $items,
-            ]);
-            if (!empty($built)) {
-                $events = [...$events, ...$built];
-            } else {
-                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
-                    'warning',
-                    'Commerce order envelope build returned no events during backfill',
-                    'backfill',
-                    'ecommerce',
-                    null,
-                    [
-                        'orderId' => $orderId,
-                        'orderTotal' => $orderTotal,
-                        'itemCount' => $itemCount,
-                        'submittedAt' => $submittedAt,
-                        'currency' => $currency,
-                    ]
-                );
-            }
-        }
-
-        return $events;
+        return [
+            'submissionClass' => $submissionClass,
+            'selectedFormIdMap' => array_fill_keys($selectedFormIds, true),
+            'formNames' => $formNames,
+        ];
     }
 
     /**
@@ -1325,10 +1544,10 @@ class BackfillService extends Component
         $formsEvents = 0;
         $ecommerceEvents = 0;
         if (in_array('forms', $sources, true)) {
-            $formsEvents = count($this->buildFormsEvents($runtimeState, $windowStart));
+            $formsEvents = $this->countFormsBackfillEvents($runtimeState, $windowStart);
         }
         if (in_array('ecommerce', $sources, true)) {
-            $ecommerceEvents = count($this->buildEcommerceEvents($runtimeState, $windowStart));
+            $ecommerceEvents = $this->countEcommerceBackfillEvents($runtimeState, $windowStart);
         }
         return [
             'sources' => $sources,

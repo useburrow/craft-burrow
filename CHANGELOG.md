@@ -4,6 +4,14 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.5] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Added
+
+- **Outbox retention `0` (force purge):** Saving operations settings with **0** days removes **all** `sent` and `failed` outbox rows immediately, truncates `burrow_outbox_sent` (send dedupe index), and leaves **`pending` / `retrying`** untouched. The stored retention window is **not** saved as 0; the previous schedule (or default 30 days) remains.
+
 ## [5.3.4] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

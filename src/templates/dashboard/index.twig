@@ -163,12 +163,13 @@
             {{ csrfInput() }}
             <label for="burrow-outbox-retention-days"><strong>Outbox retention</strong></label>
             <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px;">
-                <input id="burrow-outbox-retention-days" class="text" type="number" name="outboxRetentionDays" min="1" max="365" step="1" value="{{ outboxRetentionDays ?? 30 }}" style="width: 90px;">
+                <input id="burrow-outbox-retention-days" class="text" type="number" name="outboxRetentionDays" min="0" max="365" step="1" value="{{ outboxRetentionDays ?? 30 }}" style="width: 90px;">
                 <span class="burrow-card-detail">days</span>
                 <button class="btn">Save</button>
             </div>
             <p class="burrow-card-detail" style="margin-top: 6px;">
-                Sent and failed records are cleaned up using this retention window.
+                Sent and failed records older than this window are removed when you save (and the send dedupe index is trimmed to match).
+                Use <strong>0</strong> once to remove <em>all</em> sent/failed rows and clear that index; your saved retention days stay unchanged.
             </p>
         </form>
     </div>

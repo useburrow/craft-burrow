@@ -301,8 +301,31 @@ class SettingsController extends Controller
         $runtimeState = $plugin->getState()->getState();
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
         $operations = is_array($integrationSettings['operations'] ?? null) ? $integrationSettings['operations'] : [];
-        $retention = (int)Craft::$app->getRequest()->getBodyParam('outboxRetentionDays', $operations['outboxRetentionDays'] ?? 30);
-        $retention = max(1, min(365, $retention));
+        $storedRetention = max(1, min(365, (int)($operations['outboxRetentionDays'] ?? 30)));
+        $requested = (int)Craft::$app->getRequest()->getBodyParam('outboxRetentionDays', $storedRetention);
+        $requested = max(0, min(365, $requested));
+
+        if ($requested === 0) {
+            $deleted = $plugin->getQueue()->cleanupSentAndFailed(0);
+            $operations['outboxRetentionDays'] = $storedRetention;
+            $integrationSettings['operations'] = $operations;
+            $runtimeState['integrationSettings'] = $integrationSettings;
+            $plugin->getState()->saveState($runtimeState);
+
+            $plugin->getLogs()->log('info', 'Outbox force-purged (retention save)', 'operations', 'system', null, [
+                'outboxRetentionDays' => $storedRetention,
+                'outboxPurgeAllSentAndFailed' => true,
+                'deletedRecords' => $deleted,
+            ]);
+
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Purged {count} sent/failed outbox rows and reset the send dedupe index. Retention remains {days} days.', [
+                'count' => (string)$deleted,
+                'days' => (string)$storedRetention,
+            ]));
+            return $this->redirect('burrow/dashboard#data-backfill');
+        }
+
+        $retention = $requested;
         $operations['outboxRetentionDays'] = $retention;
         $integrationSettings['operations'] = $operations;
         $runtimeState['integrationSettings'] = $integrationSettings;

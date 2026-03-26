@@ -4,6 +4,7 @@ namespace burrow\Burrow\services;
 use burrow\Burrow\elements\OutboxElement;
 use Craft;
 use craft\base\Component;
+use craft\helpers\Db;
 
 class QueueService extends Component
 {
@@ -245,8 +246,27 @@ class QueueService extends Component
         return $ok;
     }
 
+    /**
+     * Remove completed outbox rows. Use {@see $days} = 0 to delete every `sent` and `failed` row immediately
+     * and reset the `burrow_outbox_sent` dedupe table (operations “force purge” path).
+     */
     public function cleanupSentAndFailed(int $days): int
     {
+        if ($days === 0) {
+            $deletedOutbox = (int)Craft::$app->getDb()->createCommand()->delete(
+                '{{%burrow_outbox}}',
+                ['in', 'status', ['sent', 'failed']]
+            )->execute();
+            try {
+                Db::truncateTable('{{%burrow_outbox_sent}}', Craft::$app->getDb());
+            } catch (\Throwable) {
+                // Best-effort; table may be missing in partial installs.
+            }
+            $this->cleanupElementIndexOrphans();
+
+            return $deletedOutbox;
+        }
+
         $days = max(1, $days);
         $cutoff = gmdate('Y-m-d H:i:s', strtotime('-' . $days . ' days'));
         $deletedOutbox = (int)Craft::$app->getDb()->createCommand()->delete(

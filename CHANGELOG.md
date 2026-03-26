@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [5.3.1] - 2026-03-26
 
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
 ### Fixed
 
 - SDK-built ecommerce envelopes (cart abandonment, cart/checkout funnel, order placed, line items, etc.) now set `source` to `craft-plugin` after canonical builders run, so payloads and Burrow UI no longer incorrectly show `wordpress-plugin` for Craft Commerce.

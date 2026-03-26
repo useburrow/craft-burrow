@@ -4,6 +4,18 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.3] - 2026-03-26
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Changed
+
+- During `BackfillChunkJob`, outbox mirror elements are saved with Craft search indexing deferred; at the end of each job run, accumulated outbox elements are indexed once via `Search::indexElementAttributes()`, reducing search-index churn on large backfills.
+
+### Added
+
+- `.gitignore` entries for `.DS_Store`.
+
 ## [5.3.2] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

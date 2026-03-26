@@ -7,6 +7,45 @@ use craft\base\Component;
 
 class QueueService extends Component
 {
+    private bool $deferOutboxElementSearchIndex = false;
+
+    /** @var array<int, true> */
+    private array $deferredOutboxElementIds = [];
+
+    /**
+     * Skip updating the Craft search index on each outbox element save; pair with
+     * {@see flushDeferredOutboxElementSearchIndex()} after bulk work (e.g. backfill jobs).
+     */
+    public function beginDeferringOutboxElementSearchIndex(): void
+    {
+        $this->deferOutboxElementSearchIndex = true;
+        $this->deferredOutboxElementIds = [];
+    }
+
+    /**
+     * Applies search indexing for outbox elements saved while deferral was active.
+     */
+    public function flushDeferredOutboxElementSearchIndex(): void
+    {
+        $ids = array_keys($this->deferredOutboxElementIds);
+        $this->deferredOutboxElementIds = [];
+        $this->deferOutboxElementSearchIndex = false;
+
+        foreach ($ids as $elementId) {
+            if ($elementId <= 0) {
+                continue;
+            }
+            try {
+                $element = Craft::$app->getElements()->getElementById($elementId, OutboxElement::class);
+                if ($element instanceof OutboxElement) {
+                    Craft::$app->getSearch()->indexElementAttributes($element);
+                }
+            } catch (\Throwable) {
+                // Best-effort; CP element search may lag until the next resave.
+            }
+        }
+    }
+
     /**
      * @param array<string,mixed> $payload
      */
@@ -352,8 +391,12 @@ class QueueService extends Component
         $element->outboxCreatedAt = isset($row['created_at']) ? (string)$row['created_at'] : gmdate('Y-m-d H:i:s');
         $element->outboxUpdatedAt = isset($row['updated_at']) ? (string)$row['updated_at'] : gmdate('Y-m-d H:i:s');
 
+        $updateSearchIndex = !$this->deferOutboxElementSearchIndex;
         try {
-            Craft::$app->getElements()->saveElement($element, false, false, true);
+            Craft::$app->getElements()->saveElement($element, false, false, $updateSearchIndex);
+            if ($this->deferOutboxElementSearchIndex && (int)$element->id > 0) {
+                $this->deferredOutboxElementIds[(int)$element->id] = true;
+            }
         } catch (\Throwable) {
             // Best-effort sync; outbox delivery should never fail due to index sync.
         }

@@ -98,6 +98,16 @@
         .burrow-commerce-funnel.is-disabled { opacity: 0.55; }
         .burrow-commerce-event-list { margin: 8px 0 0 18px; }
         .burrow-commerce-event-list li { margin: 2px 0; }
+        .burrow-commerce-status-map { margin-top: 14px; padding: 12px; border-radius: 6px; background: #f7f8fa; border: 1px solid #e3e5e8; }
+        .burrow-commerce-status-map.is-disabled { opacity: 0.55; }
+        .burrow-status-map-group { margin-bottom: 12px; }
+        .burrow-status-map-group:last-child { margin-bottom: 0; }
+        .burrow-status-map-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .burrow-status-map-label code { font-size: 11px; }
+        .burrow-status-map-hint { font-size: 12px; margin: 2px 0 6px; }
+        .burrow-status-map-checkboxes { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+        .burrow-status-checkbox { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+        .burrow-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
         .burrow-review-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 12px 0 6px; }
         .burrow-review-kpi { border: 1px solid #e3e5e8; border-radius: 8px; background: #fff; padding: 10px 12px; }
         .burrow-review-kpi .label { display: block; font-size: 12px; color: #667085; }
@@ -726,6 +736,45 @@
                             <li><code>ecommerce.cart.recovered</code></li>
                         </ul>
                     </div>
+
+                    {% set commerceStatuses = integrationStepData.commerceOrderStatuses ?? [] %}
+                    {% if commerceStatuses|length %}
+                        {% set savedMap = commerceConfig.orderStatusMap ?? {} %}
+                        <div class="burrow-commerce-status-map {{ commerceMode == 'off' ? 'is-disabled' : '' }}">
+                            <h4 style="margin: 0 0 4px;">Order status mapping</h4>
+                            <p class="burrow-muted" style="margin: 0 0 12px;">Map your Commerce order statuses to lifecycle events so Burrow can track fulfillment, refunds, and cancellations. Statuses not mapped here are treated as active orders.</p>
+                            {% set lifecycleGroups = [
+                                { key: 'fulfilled', label: 'Fulfilled / Shipped', event: 'ecommerce.order.fulfilled', hint: 'Statuses that mean an order has been shipped or fulfilled.' },
+                                { key: 'refunded', label: 'Refunded', event: 'ecommerce.order.refunded', hint: 'Statuses that mean an order has been refunded.' },
+                                { key: 'cancelled', label: 'Cancelled', event: 'ecommerce.order.cancelled', hint: 'Statuses that mean an order has been cancelled.' },
+                            ] %}
+                            {% for group in lifecycleGroups %}
+                                {% set selectedHandles = savedMap[group.key] ?? [] %}
+                                <div class="burrow-status-map-group">
+                                    <div class="burrow-status-map-label">
+                                        <strong>{{ group.label }}</strong>
+                                        <code class="burrow-muted">{{ group.event }}</code>
+                                    </div>
+                                    <p class="burrow-muted burrow-status-map-hint">{{ group.hint }}</p>
+                                    <div class="burrow-status-map-checkboxes">
+                                        {% for status in commerceStatuses %}
+                                            <label class="burrow-status-checkbox">
+                                                <input type="checkbox"
+                                                       name="orderStatusMap_{{ group.key }}[]"
+                                                       value="{{ status.handle }}"
+                                                       {{ status.handle in selectedHandles ? 'checked' : '' }}
+                                                       {{ commerceMode == 'off' ? 'disabled' : '' }}>
+                                                {% if status.color %}
+                                                    <span class="burrow-status-dot" style="background: {{ status.color }};"></span>
+                                                {% endif %}
+                                                {{ status.name }}
+                                            </label>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                 </div>
                 <div style="margin-top: 16px;">
                     <button class="btn submit">Continue to {{ stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step') }}</button>
@@ -737,6 +786,8 @@
                     const funnelWrap = document.querySelector('.burrow-commerce-funnel');
                     const funnelBox = document.querySelector('.burrow-commerce-funnel-checkbox');
                     const modeCards = Array.from(document.querySelectorAll('.burrow-commerce-mode-card'));
+                    const statusMapWrap = document.querySelector('.burrow-commerce-status-map');
+                    const statusMapBoxes = Array.from(document.querySelectorAll('.burrow-status-map-checkboxes input[type="checkbox"]'));
                     if (!modeInputs.length || !funnelWrap || !funnelBox) {
                         return;
                     }
@@ -752,11 +803,16 @@
                         });
                         const enabled = mode !== 'off';
                         funnelWrap.classList.toggle('is-disabled', !enabled);
+                        if (statusMapWrap) {
+                            statusMapWrap.classList.toggle('is-disabled', !enabled);
+                        }
                         if (!enabled) {
                             funnelBox.checked = false;
                             funnelBox.setAttribute('disabled', 'disabled');
+                            statusMapBoxes.forEach((cb) => cb.setAttribute('disabled', 'disabled'));
                         } else {
                             funnelBox.removeAttribute('disabled');
+                            statusMapBoxes.forEach((cb) => cb.removeAttribute('disabled'));
                         }
                     };
                     modeInputs.forEach((input) => input.addEventListener('change', sync));

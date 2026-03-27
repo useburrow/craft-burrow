@@ -189,6 +189,7 @@ class CommerceTrackingService extends Component
             $tags['couponCode'] = $couponCode;
         }
 
+        $externalEntityId = 'craft_order_' . $orderId;
         $events = $plugin->getBurrowApi()->buildEcommerceOrderAndItemEvents($runtimeState, [
             'orderId' => $orderId,
             'orderTotal' => $orderTotal,
@@ -198,8 +199,9 @@ class CommerceTrackingService extends Component
             'timestamp' => $submittedAt,
             'subtotal' => $this->floatValue($order, ['itemSubtotal', 'subtotal']),
             'tax' => $this->floatValue($order, ['totalTax', 'taxTotal']),
-            'shipping' => $this->floatValue($order, ['totalShippingCost']),
-            'externalEntityId' => 'craft_order_' . $orderId,
+            'shippingTotal' => $this->floatValue($order, ['totalShippingCost']),
+            'externalEntityId' => $externalEntityId,
+            'externalEventId' => $externalEntityId . '_placed',
             'customerToken' => $customerToken,
             'tags' => $tags,
             'items' => $lineItems,
@@ -249,6 +251,153 @@ class CommerceTrackingService extends Component
                 'failed' => $failed,
             ]
         );
+    }
+
+    /**
+     * Fired when an order's status changes. Maps the new Commerce status handle to a lifecycle
+     * state (fulfilled / refunded / cancelled) using the store's configured orderStatusMap,
+     * then emits the corresponding lifecycle event.
+     */
+    public function handleOrderStatusChangeEvent(Event $event): void
+    {
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!$this->isCommerceTrackingEnabled($runtimeState)) {
+            return;
+        }
+
+        $orderHistory = $event->orderHistory ?? null;
+        if (!is_object($orderHistory)) {
+            return;
+        }
+
+        $order = $event->order ?? ($orderHistory->order ?? null);
+        if (!is_object($order)) {
+            $order = is_object($event->sender ?? null) ? $event->sender : null;
+        }
+        if ($order === null) {
+            return;
+        }
+
+        $newStatus = $orderHistory->newStatus ?? null;
+        $newHandle = '';
+        if (is_object($newStatus) && isset($newStatus->handle)) {
+            $newHandle = strtolower(trim((string)$newStatus->handle));
+        } elseif (isset($orderHistory->newStatusId)) {
+            $newHandle = $this->resolveStatusHandleById((int)$orderHistory->newStatusId);
+        }
+        if ($newHandle === '') {
+            return;
+        }
+
+        $lifecycleState = $this->resolveLifecycleStateFromHandle($runtimeState, $newHandle);
+        if ($lifecycleState === null) {
+            return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        if ($orderId === '') {
+            return;
+        }
+
+        $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
+        if ($currency === '') {
+            $currency = 'USD';
+        }
+        $orderTotal = $this->extractOrderTotal($order);
+        $customerToken = $this->extractCustomerToken($order);
+        $tags = [
+            'provider' => 'craft-commerce',
+            'currency' => $currency,
+        ];
+        if ($customerToken !== '') {
+            $tags['customerToken'] = $customerToken;
+        }
+
+        $externalEntityId = 'craft_order_' . $orderId;
+        $envelope = $plugin->getBurrowApi()->buildEcommerceOrderLifecycleEvent($runtimeState, [
+            'lifecycleState' => $lifecycleState,
+            'orderId' => $orderId,
+            'orderTotal' => $orderTotal,
+            'currency' => $currency,
+            'timestamp' => gmdate('c'),
+            'externalEntityId' => $externalEntityId,
+            'externalEventId' => $externalEntityId . '_' . $lifecycleState,
+            'tags' => $tags,
+        ]);
+
+        if (empty($envelope)) {
+            $plugin->getLogs()->log('warning', 'Commerce order lifecycle envelope build failed', 'commerce', 'ecommerce', null, [
+                'orderId' => $orderId,
+                'lifecycleState' => $lifecycleState,
+                'statusHandle' => $newHandle,
+            ]);
+            return;
+        }
+
+        $ok = $this->publishAndTrackRealtimeEvent($envelope, $runtimeState, [
+            'type' => 'order_' . $lifecycleState,
+            'orderId' => $orderId,
+        ]);
+
+        $plugin->getLogs()->log(
+            $ok ? 'info' : 'warning',
+            $ok ? 'Commerce order ' . $lifecycleState . ' event published' : 'Commerce order ' . $lifecycleState . ' event failed',
+            'commerce',
+            'ecommerce',
+            null,
+            ['orderId' => $orderId, 'lifecycleState' => $lifecycleState, 'statusHandle' => $newHandle]
+        );
+    }
+
+    /**
+     * Look up the configured orderStatusMap and return the lifecycle state for a given Commerce status handle.
+     *
+     * @return 'fulfilled'|'refunded'|'cancelled'|null
+     */
+    private function resolveLifecycleStateFromHandle(array $runtimeState, string $handle): ?string
+    {
+        $commerceConfig = is_array($runtimeState['integrationSettings']['commerce'] ?? null)
+            ? $runtimeState['integrationSettings']['commerce']
+            : [];
+        $map = is_array($commerceConfig['orderStatusMap'] ?? null) ? $commerceConfig['orderStatusMap'] : [];
+
+        foreach ($map as $lifecycleState => $handles) {
+            if (!is_array($handles)) {
+                continue;
+            }
+            $normalized = array_map(fn($h) => strtolower(trim((string)$h)), $handles);
+            if (in_array($handle, $normalized, true)) {
+                return (string)$lifecycleState;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveStatusHandleById(int $statusId): string
+    {
+        $commerceClass = '\craft\commerce\Plugin';
+        if (!class_exists($commerceClass) || !method_exists($commerceClass, 'getInstance')) {
+            return '';
+        }
+
+        try {
+            $commerce = $commerceClass::getInstance();
+            if ($commerce === null || !method_exists($commerce, 'getOrderStatuses')) {
+                return '';
+            }
+            $statusService = $commerce->getOrderStatuses();
+            if (method_exists($statusService, 'getOrderStatusById')) {
+                $status = $statusService->getOrderStatusById($statusId);
+                if (is_object($status) && isset($status->handle)) {
+                    return strtolower(trim((string)$status->handle));
+                }
+            }
+        } catch (\Throwable) {
+        }
+
+        return '';
     }
 
     public function handlePaymentProcessedEvent(Event $event): void

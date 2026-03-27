@@ -492,7 +492,6 @@ class BurrowApiService extends Component
         $externalEntityId = trim((string)($payload['externalEntityId'] ?? ('craft_order_' . $orderId)));
 
         try {
-            $shippingMethod = trim((string)($tags['shippingMethod'] ?? ''));
             $orderPlaced = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildEcommerceOrderPlacedEvent([
                 'organizationId' => $organizationId,
                 'clientId' => $clientId,
@@ -504,12 +503,13 @@ class BurrowApiService extends Component
                 'submittedAt' => $submittedAt,
                 'subtotal' => (float)($payload['subtotal'] ?? 0),
                 'tax' => (float)($payload['tax'] ?? 0),
+                'shippingTotal' => (float)($payload['shippingTotal'] ?? $payload['shipping'] ?? 0),
                 'timestamp' => trim((string)($payload['timestamp'] ?? $submittedAt)),
                 'externalEntityId' => $externalEntityId,
+                'externalEventId' => trim((string)($payload['externalEventId'] ?? ($externalEntityId . '_placed'))),
                 'tags' => $tags,
-                'shippingMethod' => $shippingMethod,
             ], $routing);
-            $events[] = $this->withEcommerceOrderPlacedShippingProperties($orderPlaced, $payload);
+            $events[] = $this->withCraftPluginSource($orderPlaced);
         } catch (\Throwable $e) {
             \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
                 'warning',
@@ -897,6 +897,82 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Build ecommerce order lifecycle envelope (fulfilled, refunded, or cancelled).
+     *
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $payload  Must include orderId, currency, orderTotal, and lifecycleState.
+     * @return array<string,mixed>
+     */
+    public function buildEcommerceOrderLifecycleEvent(array $runtimeState, array $payload): array
+    {
+        $lifecycleState = trim((string)($payload['lifecycleState'] ?? ''));
+        $builderMap = [
+            'fulfilled' => 'buildEcommerceOrderFulfilledEvent',
+            'refunded' => 'buildEcommerceOrderRefundedEvent',
+            'cancelled' => 'buildEcommerceOrderCancelledEvent',
+        ];
+        if (!isset($builderMap[$lifecycleState])) {
+            return [];
+        }
+
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        $ecommerceSourceId = $this->resolveChannelSourceId($runtimeState, 'ecommerce');
+        if ($projectId === '' || $ecommerceSourceId === '') {
+            return [];
+        }
+
+        $builderClass = '\Burrow\Sdk\Events\CanonicalEnvelopeBuilders';
+        $builderMethod = $builderMap[$lifecycleState];
+        $routing = $this->buildRoutingResolver($runtimeState);
+
+        $timestamp = trim((string)($payload['timestamp'] ?? gmdate('c')));
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+
+        if (method_exists($builderClass, $builderMethod)) {
+            try {
+                $envelope = $builderClass::{$builderMethod}(array_merge($payload, [
+                    'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                    'clientId' => $this->resolveClientId($runtimeState),
+                    'timestamp' => $timestamp,
+                ]), $routing);
+
+                return $this->withCraftPluginSource($envelope);
+            } catch (\Throwable $e) {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Ecommerce order.' . $lifecycleState . ' SDK builder failed, using manual envelope',
+                    'sdk',
+                    'ecommerce',
+                    null,
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        $eventName = 'ecommerce.order.' . $lifecycleState;
+        $externalEntityId = trim((string)($payload['externalEntityId'] ?? ''));
+        return [
+            'projectId' => $projectId,
+            'projectSourceId' => $ecommerceSourceId,
+            'channel' => 'ecommerce',
+            'event' => $eventName,
+            'timestamp' => $timestamp,
+            'source' => 'craft-plugin',
+            'isLifecycle' => true,
+            'entityType' => 'order',
+            'state' => $lifecycleState,
+            'externalEntityId' => $externalEntityId,
+            'externalEventId' => trim((string)($payload['externalEventId'] ?? ($externalEntityId !== '' ? $externalEntityId . '_' . $lifecycleState : ''))),
+            'tags' => $tags,
+            'properties' => [
+                'orderId' => $payload['orderId'] ?? '',
+                'orderTotal' => $payload['orderTotal'] ?? 0,
+                'currency' => $payload['currency'] ?? '',
+            ],
+        ];
+    }
+
+    /**
      * Build ecommerce checkout started envelope.
      *
      * @param array<string,mixed> $runtimeState
@@ -981,32 +1057,6 @@ class BurrowApiService extends Component
         ];
     }
 
-    /**
-     * The SDK order.placed builder omits shipping from `properties` (only tax/subtotal). Burrow surfaces
-     * `properties` in activity UIs, so merge shipping totals and method here when the commerce payload supplies them.
-     *
-     * @param array<string,mixed> $envelope
-     * @param array<string,mixed> $payload
-     * @return array<string,mixed>
-     */
-    private function withEcommerceOrderPlacedShippingProperties(array $envelope, array $payload): array
-    {
-        $props = is_array($envelope['properties'] ?? null) ? $envelope['properties'] : [];
-        if (array_key_exists('shipping', $payload)) {
-            $shipping = $payload['shipping'];
-            if (is_numeric($shipping)) {
-                $props['shippingTotal'] = (float)$shipping;
-            }
-        }
-        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
-        $method = trim((string)($tags['shippingMethod'] ?? ''));
-        if ($method !== '') {
-            $props['shippingMethod'] = $method;
-        }
-        $envelope['properties'] = $props;
-
-        return $envelope;
-    }
 
     /**
      * Shared PHP SDK canonical builders default `source` for WordPress; Craft must emit craft-plugin.

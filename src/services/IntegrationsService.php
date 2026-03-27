@@ -313,6 +313,70 @@ class IntegrationsService extends Component
     }
 
     /**
+     * @return array<int,array{handle: string, name: string, color: string, id: string}>
+     */
+    public function getCommerceOrderStatuses(): array
+    {
+        $commerceClass = '\craft\commerce\Plugin';
+        if (!class_exists($commerceClass) || !method_exists($commerceClass, 'getInstance')) {
+            return [];
+        }
+
+        try {
+            $commerce = $commerceClass::getInstance();
+            if ($commerce === null || !method_exists($commerce, 'getOrderStatuses')) {
+                return [];
+            }
+
+            $statusService = $commerce->getOrderStatuses();
+            $statuses = [];
+
+            // Commerce 5.x: per-store statuses.
+            if (method_exists($commerce, 'getStores')) {
+                $stores = $commerce->getStores();
+                $store = method_exists($stores, 'getCurrentStore') ? $stores->getCurrentStore() : null;
+                if ($store !== null && method_exists($statusService, 'getAllOrderStatusesForStore')) {
+                    $allStatuses = $statusService->getAllOrderStatusesForStore($store);
+                    foreach ($allStatuses as $status) {
+                        if (!is_object($status)) {
+                            continue;
+                        }
+                        $statuses[] = [
+                            'id' => (string)($status->id ?? ''),
+                            'handle' => (string)($status->handle ?? ''),
+                            'name' => (string)($status->name ?? ''),
+                            'color' => (string)($status->color ?? ''),
+                        ];
+                    }
+                    if ($statuses !== []) {
+                        return $statuses;
+                    }
+                }
+            }
+
+            // Commerce 4.x fallback.
+            if (method_exists($statusService, 'getAllOrderStatuses')) {
+                $allStatuses = $statusService->getAllOrderStatuses();
+                foreach ($allStatuses as $status) {
+                    if (!is_object($status)) {
+                        continue;
+                    }
+                    $statuses[] = [
+                        'id' => (string)($status->id ?? ''),
+                        'handle' => (string)($status->handle ?? ''),
+                        'name' => (string)($status->name ?? ''),
+                        'color' => (string)($status->color ?? ''),
+                    ];
+                }
+            }
+
+            return $statuses;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
      * @param string[] $selected
      * @return array<string,mixed>
      */

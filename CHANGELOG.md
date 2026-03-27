@@ -4,6 +4,23 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.9] - 2026-03-27
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Commerce backfill: exclude incomplete carts.** The backfill query now requires `isCompleted(true)` in addition to `isPaid()`, filtering out carts that had a payment recorded but were never submitted through checkout. These incomplete carts had no Commerce order status and were inflating order counts (~41 extra orders in YTD testing).
+
+### Added
+
+- **Order lifecycle events.** The plugin now emits `ecommerce.order.fulfilled`, `ecommerce.order.refunded`, and `ecommerce.order.cancelled` events when an order's status changes in Craft Commerce. This enables time-to-ship metrics and accurate net-revenue reporting in Burrow.
+- **Order status mapping in onboarding.** The Commerce setup step now shows all of the store's order statuses and lets you map each one to a lifecycle state (Fulfilled / Shipped, Refunded, Cancelled). Statuses not mapped are treated as active placed orders. Custom Commerce statuses are fully supported.
+- **Lifecycle events in backfill.** Ecommerce backfill now emits the appropriate lifecycle event alongside `order.placed` when an order's current status maps to fulfilled, refunded, or cancelled.
+- **Backfill probe: status breakdown.** The diagnostics probe now shows a per-status order count and revenue table, plus a Year to date window preset.
+- **Canonical `shippingTotal` property.** `ecommerce.order.placed` events now include `properties.shippingTotal` (numeric) as the canonical shipping amount, set natively via the SDK builder. The legacy `properties.shipping` field and `properties.shippingMethod` duplication have been removed; `shippingMethod` remains in **tags** only.
+- **Replay-safe `externalEventId`.** All order lifecycle events (`placed`, `fulfilled`, `refunded`, `cancelled`) now carry a stable `externalEventId` (e.g. `craft_order_123_placed`) so Burrow can deduplicate on replay. `externalEntityId` (`craft_order_123`) continues to link events for the same order entity.
+
 ## [5.3.8] - 2026-03-27
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

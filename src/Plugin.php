@@ -327,6 +327,29 @@ class Plugin extends CraftPlugin
             );
         }
 
+        $orderStatusesClass = '\craft\commerce\services\OrderStatuses';
+        if (class_exists($orderStatusesClass)) {
+            $statusChangeConst = $orderStatusesClass . '::EVENT_ORDER_STATUS_CHANGE';
+            if (defined($statusChangeConst)) {
+                /** @var string $statusChangeEventName */
+                $statusChangeEventName = constant($statusChangeConst);
+                Event::on(
+                    $orderStatusesClass,
+                    $statusChangeEventName,
+                    function (\yii\base\Event $event): void {
+                        try {
+                            $this->getCommerceTracking()->handleOrderStatusChangeEvent($event);
+                        } catch (\Throwable $e) {
+                            $this->getLogs()->log('warning', 'Commerce order status change dispatch failed', 'commerce', 'ecommerce', null, [
+                                'handler' => 'handleOrderStatusChangeEvent',
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+                );
+            }
+        }
+
         $paymentsClass = '\craft\commerce\services\Payments';
         if (class_exists($paymentsClass)) {
             $paymentConst = $paymentsClass . '::EVENT_AFTER_PROCESS_PAYMENT';

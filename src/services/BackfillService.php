@@ -475,6 +475,7 @@ class BackfillService extends Component
             'last_7_days' => 'Last 7 days',
             'last_30_days' => 'Last 30 days',
             'last_90_days' => 'Last 90 days',
+            'year_to_date' => 'Year to date',
             'last_365_days' => 'Past year',
             'last_730_days' => 'Two years',
             'all_time' => 'All time',
@@ -544,6 +545,7 @@ class BackfillService extends Component
         return match ($preset) {
             'last_7_days' => gmdate('c', strtotime('-7 days')),
             'last_90_days' => gmdate('c', strtotime('-90 days')),
+            'year_to_date' => gmdate('Y') . '-01-01T00:00:00+00:00',
             'last_365_days' => gmdate('c', strtotime('-365 days')),
             'last_730_days' => gmdate('c', strtotime('-730 days')),
             'all_time' => '1970-01-01T00:00:00Z',
@@ -800,12 +802,18 @@ class BackfillService extends Component
     }
 
     /**
-     * Restrict ecommerce backfill to orders Commerce treats as paid (see {@see \craft\commerce\elements\db\OrderQuery::isPaid()}).
+     * Restrict ecommerce backfill to completed, paid orders.
+     *
+     * - `isCompleted(true)` excludes carts that were never submitted through checkout.
+     * - `isPaid()` excludes orders that haven't been paid yet.
      *
      * @param object $query Order element query from {@see \craft\commerce\elements\Order::find()}
      */
     private function applyPaidOnlyCommerceBackfillFilter(object $query): void
     {
+        if (method_exists($query, 'isCompleted')) {
+            $query->isCompleted(true);
+        }
         if (method_exists($query, 'isPaid')) {
             $query->isPaid();
         }
@@ -904,6 +912,7 @@ class BackfillService extends Component
                 $tags['couponCode'] = $couponCode;
             }
 
+            $externalEntityId = 'craft_order_' . $orderId;
             $built = $api->buildEcommerceOrderAndItemEvents($runtimeState, [
                 'orderId' => $orderId,
                 'orderTotal' => $orderTotal,
@@ -913,8 +922,9 @@ class BackfillService extends Component
                 'timestamp' => $submittedAt,
                 'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
                 'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
-                'shipping' => $this->objectFloatValue($order, ['totalShippingCost']),
-                'externalEntityId' => 'craft_order_' . $orderId,
+                'shippingTotal' => $this->objectFloatValue($order, ['totalShippingCost']),
+                'externalEntityId' => $externalEntityId,
+                'externalEventId' => $externalEntityId . '_placed',
                 'customerToken' => $customerToken,
                 'tags' => $tags,
                 'items' => $items,
@@ -940,6 +950,28 @@ class BackfillService extends Component
                         'currency' => $currency,
                     ]
                 );
+            }
+
+            $statusHandle = $this->extractCommerceOrderStatusHandle($order);
+            $lifecycleState = $this->resolveLifecycleStateForBackfill($runtimeState, $statusHandle);
+            if ($lifecycleState !== null) {
+                $lifecycleTags = ['provider' => 'craft-commerce', 'currency' => $currency];
+                if ($customerToken !== '') {
+                    $lifecycleTags['customerToken'] = $customerToken;
+                }
+                $lifecycleEnvelope = $api->buildEcommerceOrderLifecycleEvent($runtimeState, [
+                    'lifecycleState' => $lifecycleState,
+                    'orderId' => $orderId,
+                    'orderTotal' => $orderTotal,
+                    'currency' => $currency,
+                    'timestamp' => $submittedAt,
+                    'externalEntityId' => $externalEntityId,
+                    'externalEventId' => $externalEntityId . '_' . $lifecycleState,
+                    'tags' => $lifecycleTags,
+                ]);
+                if (is_array($lifecycleEnvelope) && $lifecycleEnvelope !== []) {
+                    $events[] = $lifecycleEnvelope;
+                }
             }
         }
         unset($orders);
@@ -1679,6 +1711,46 @@ class BackfillService extends Component
         return '';
     }
 
+    private function extractCommerceOrderStatusHandle(object $order): string
+    {
+        $status = null;
+        if (method_exists($order, 'getOrderStatus')) {
+            $status = $order->getOrderStatus();
+        } elseif (isset($order->orderStatus)) {
+            $status = $order->orderStatus;
+        }
+        if (is_object($status) && isset($status->handle)) {
+            return strtolower(trim((string)$status->handle));
+        }
+        return '';
+    }
+
+    /**
+     * @return 'fulfilled'|'refunded'|'cancelled'|null
+     */
+    private function resolveLifecycleStateForBackfill(array $runtimeState, string $statusHandle): ?string
+    {
+        if ($statusHandle === '') {
+            return null;
+        }
+        $commerceConfig = is_array($runtimeState['integrationSettings']['commerce'] ?? null)
+            ? $runtimeState['integrationSettings']['commerce']
+            : [];
+        $map = is_array($commerceConfig['orderStatusMap'] ?? null) ? $commerceConfig['orderStatusMap'] : [];
+
+        foreach ($map as $lifecycleState => $handles) {
+            if (!is_array($handles)) {
+                continue;
+            }
+            $normalized = array_map(fn($h) => strtolower(trim((string)$h)), $handles);
+            if (in_array($statusHandle, $normalized, true)) {
+                return (string)$lifecycleState;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @param mixed $value
      */
@@ -1814,7 +1886,7 @@ class BackfillService extends Component
         try {
             $query = $orderClass::find()->status(null)->site('*');
             $this->applyPaidOnlyCommerceBackfillFilter($query);
-            $orders = $query->orderBy(['dateCreated' => SORT_DESC])->limit(200)->all();
+            $orders = $query->orderBy(['dateCreated' => SORT_DESC])->limit(500)->all();
         } catch (\Throwable $e) {
             return ['available' => true, 'error' => $e->getMessage(), 'scanned' => 0, 'inWindow' => 0, 'samples' => []];
         }
@@ -1823,6 +1895,11 @@ class BackfillService extends Component
         $placedEligible = 0;
         $backfillEligible = 0;
         $statusSignalPresent = 0;
+        /** @var array<string,int> $statusBreakdown */
+        $statusBreakdown = [];
+        /** @var array<string,float> $revenueByStatus */
+        $revenueByStatus = [];
+        $totalRevenue = 0.0;
         $samples = [];
         foreach ($orders as $order) {
             if (!is_object($order)) {
@@ -1830,18 +1907,26 @@ class BackfillService extends Component
             }
             $timestamp = $this->normalizeTimestamp($this->objectDateValue($order, ['dateOrdered', 'datePaid', 'dateAuthorized', 'dateCreated']));
             $ts = strtotime($timestamp) ?: 0;
-            if ($ts >= $windowStartTs) {
-                $inWindow++;
+            if ($ts < $windowStartTs) {
+                continue;
             }
+            $inWindow++;
+            $statusHandle = $this->extractCommerceOrderStatusHandle($order);
+            $statusLabel = $this->extractCommerceOrderStatusLabel($order);
             $rawStatus = strtolower(trim($this->objectStringValue($order, ['status', 'orderStatus'])));
             $normalizedStatus = preg_replace('/\s+/', '', $rawStatus) ?? $rawStatus;
-            $statusLabel = $this->extractCommerceOrderStatusLabel($order);
             if ($normalizedStatus !== '' || $statusLabel !== '') {
                 $statusSignalPresent++;
             }
-            // Probe mirrors backfill: paid orders only (see applyPaidOnlyCommerceBackfillFilter).
             $placedEligible++;
             $backfillEligible++;
+
+            $bucketKey = $statusHandle !== '' ? $statusHandle : ($statusLabel !== '' ? $statusLabel : 'unknown');
+            $statusBreakdown[$bucketKey] = ($statusBreakdown[$bucketKey] ?? 0) + 1;
+            $orderTotal = $this->extractCommerceOrderTotal($order);
+            $revenueByStatus[$bucketKey] = ($revenueByStatus[$bucketKey] ?? 0.0) + $orderTotal;
+            $totalRevenue += $orderTotal;
+
             if (count($samples) < 5) {
                 $isCompleted = false;
                 if (method_exists($order, 'getIsCompleted')) {
@@ -1854,6 +1939,7 @@ class BackfillService extends Component
                     'number' => $this->objectStringValue($order, ['number']),
                     'reference' => $this->objectStringValue($order, ['reference', 'shortNumber']),
                     'statusLabel' => $statusLabel,
+                    'statusHandle' => $statusHandle,
                     'statusRaw' => $rawStatus,
                     'statusNormalized' => $normalizedStatus,
                     'orderStatusId' => $this->objectStringValue($order, ['orderStatusId']),
@@ -1863,7 +1949,7 @@ class BackfillService extends Component
                     'backfillEligible' => 'yes',
                     'excludeReason' => '',
                     'timestamp' => $timestamp,
-                    'total' => $this->extractCommerceOrderTotal($order),
+                    'total' => $orderTotal,
                     'itemCount' => count($this->extractCommerceLineItemsFromOrderElement($order)),
                     'totalPaid' => $this->objectFloatValue($order, ['totalPaid']),
                     'totalPrice' => $this->objectFloatValue($order, ['totalPrice']),
@@ -1873,6 +1959,8 @@ class BackfillService extends Component
             }
         }
 
+        arsort($statusBreakdown);
+
         return [
             'available' => true,
             'scanned' => count($orders),
@@ -1880,6 +1968,9 @@ class BackfillService extends Component
             'placedEligible' => $placedEligible,
             'backfillEligible' => $backfillEligible,
             'statusSignalPresent' => $statusSignalPresent,
+            'statusBreakdown' => $statusBreakdown,
+            'revenueByStatus' => array_map(fn($v) => round($v, 2), $revenueByStatus),
+            'totalRevenue' => round($totalRevenue, 2),
             'samples' => $samples,
         ];
     }

@@ -97,10 +97,21 @@ class SettingsController extends Controller
                 $commerce = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
                 $mode = (string)($commerce['mode'] ?? 'track');
                 $funnel = !empty($commerce['ecommerceFunnel']);
+                $statusMap = is_array($commerce['orderStatusMap'] ?? null) ? $commerce['orderStatusMap'] : [];
+                $mappedCount = 0;
+                foreach ($statusMap as $handles) {
+                    if (is_array($handles)) {
+                        $mappedCount += count($handles);
+                    }
+                }
                 if ($mode !== 'track') {
                     $detail = 'Off';
+                } elseif ($funnel && $mappedCount > 0) {
+                    $detail = 'Orders + Funnel + ' . $mappedCount . ' status mapping' . ($mappedCount === 1 ? '' : 's');
                 } elseif ($funnel) {
                     $detail = 'Orders and line items + Funnel';
+                } elseif ($mappedCount > 0) {
+                    $detail = 'Orders + ' . $mappedCount . ' status mapping' . ($mappedCount === 1 ? '' : 's');
                 } else {
                     $detail = 'Orders and line items';
                 }
@@ -144,6 +155,7 @@ class SettingsController extends Controller
                 'formieForms' => $integrationsService->getFormieForms(),
                 'formieFieldsByFormId' => $formieFieldsByFormId,
                 'settings' => is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [],
+                'commerceOrderStatuses' => $integrationsService->getCommerceOrderStatuses(),
             ],
             'integrationReadinessRows' => $integrationReadinessRows,
             'contractRows' => $contractRows,
@@ -645,9 +657,25 @@ class SettingsController extends Controller
             if (!in_array($mode, ['track', 'off'], true)) {
                 $mode = 'track';
             }
+            $allowedLifecycleStates = ['fulfilled', 'refunded', 'cancelled'];
+            $orderStatusMap = [];
+            foreach ($allowedLifecycleStates as $lifecycleState) {
+                $raw = Craft::$app->getRequest()->getBodyParam('orderStatusMap_' . $lifecycleState, []);
+                $handles = [];
+                if (is_array($raw)) {
+                    foreach ($raw as $handle) {
+                        $h = trim((string)$handle);
+                        if ($h !== '') {
+                            $handles[] = $h;
+                        }
+                    }
+                }
+                $orderStatusMap[$lifecycleState] = $handles;
+            }
             $integrationSettings['commerce'] = [
                 'mode' => $mode,
                 'ecommerceFunnel' => (bool)Craft::$app->getRequest()->getBodyParam('ecommerceFunnel', false),
+                'orderStatusMap' => $orderStatusMap,
             ];
             $runtimeState['capabilities']['ecommerce_funnel'] = $mode === 'track' && !empty($integrationSettings['commerce']['ecommerceFunnel']);
         }

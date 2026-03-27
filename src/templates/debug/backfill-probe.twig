@@ -61,6 +61,29 @@
             {% endif %}
         </p>
 
+        {% if key == 'commerce' and (section.statusBreakdown ?? []) is not empty %}
+            <h4 style="margin: 10px 0 6px;">Orders by status (in window)</h4>
+            <table class="data fullwidth" style="max-width: 600px; margin-bottom: 14px;">
+                <thead>
+                    <tr><th>Status handle</th><th style="text-align:right">Orders</th><th style="text-align:right">Revenue</th></tr>
+                </thead>
+                <tbody>
+                {% for handle, count in section.statusBreakdown %}
+                    <tr>
+                        <td><code>{{ handle }}</code></td>
+                        <td style="text-align:right">{{ count }}</td>
+                        <td style="text-align:right">{{ (section.revenueByStatus[handle] ?? 0)|number_format(2) }}</td>
+                    </tr>
+                {% endfor %}
+                <tr style="font-weight:700; border-top:2px solid #ccc;">
+                    <td>Total</td>
+                    <td style="text-align:right">{{ section.inWindow ?? 0 }}</td>
+                    <td style="text-align:right">{{ (section.totalRevenue ?? 0)|number_format(2) }}</td>
+                </tr>
+                </tbody>
+            </table>
+        {% endif %}
+
         {% set samples = section.samples ?? [] %}
         {% if samples is empty %}
             <p class="light">No sample records.</p>

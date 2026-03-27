@@ -327,14 +327,16 @@ class Plugin extends CraftPlugin
             );
         }
 
-        $orderStatusesClass = '\craft\commerce\services\OrderStatuses';
-        if (class_exists($orderStatusesClass)) {
-            $statusChangeConst = $orderStatusesClass . '::EVENT_ORDER_STATUS_CHANGE';
+        // Order status changes fire on OrderHistories (see Commerce OrderHistories::EVENT_ORDER_STATUS_CHANGE),
+        // not OrderStatuses (which only exposes EVENT_ORDER_STATUS_CHANGE_EMAILS).
+        $orderHistoriesClass = '\craft\commerce\services\OrderHistories';
+        if (class_exists($orderHistoriesClass)) {
+            $statusChangeConst = $orderHistoriesClass . '::EVENT_ORDER_STATUS_CHANGE';
             if (defined($statusChangeConst)) {
                 /** @var string $statusChangeEventName */
                 $statusChangeEventName = constant($statusChangeConst);
                 Event::on(
-                    $orderStatusesClass,
+                    $orderHistoriesClass,
                     $statusChangeEventName,
                     function (\yii\base\Event $event): void {
                         try {

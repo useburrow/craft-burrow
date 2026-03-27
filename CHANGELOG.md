@@ -4,6 +4,18 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.10] - 2026-03-27
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Commerce order status lifecycle handler** was registered on `OrderStatuses::EVENT_ORDER_STATUS_CHANGE`, which Craft Commerce does not define. Status changes are dispatched from **`OrderHistories::EVENT_ORDER_STATUS_CHANGE`**; the listener is now attached there so `ecommerce.order.fulfilled`, `refunded`, and `cancelled` fire when CP status changes.
+
+### Changed
+
+- **Lifecycle event timestamps** use the order element’s **`dateUpdated`** (Craft’s persisted save time), normalized through the existing `dateValue()` helper for ISO-8601 transport, instead of `gmdate('c')` at handler runtime.
+
 ## [5.3.9] - 2026-03-27
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

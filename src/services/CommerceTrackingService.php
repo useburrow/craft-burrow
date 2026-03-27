@@ -320,7 +320,7 @@ class CommerceTrackingService extends Component
             'orderId' => $orderId,
             'orderTotal' => $orderTotal,
             'currency' => $currency,
-            'timestamp' => gmdate('c'),
+            'timestamp' => $this->dateValue($order, ['dateUpdated']) ?: gmdate('c'),
             'externalEntityId' => $externalEntityId,
             'externalEventId' => $externalEntityId . '_' . $lifecycleState,
             'tags' => $tags,

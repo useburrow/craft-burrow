@@ -1,6 +1,6 @@
 {
     "name": "useburrow/craft-burrow",
-    "version": "5.3.9",
+    "version": "5.3.10",
     "description": "Connect your Craft site to Burrow — the orchestration layer for agency operations. Event tracking, system snapshots, and operational visibility for Freeform, Formie, and Commerce.",
     "type": "craft-plugin",
     "keywords": ["craft", "craftcms", "craft-plugin", "burrow", "agency", "operations", "orchestration", "event-tracking", "freeform", "formie", "craft-commerce", "ecommerce", "analytics", "reporting", "monitoring", "dashboard", "visibility", "integration", "sync", "backfill", "observability", "multi-tenant"],

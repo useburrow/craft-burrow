@@ -479,7 +479,10 @@
 
         {% elseif step == 'formie' %}
             {% set formieConfig = integrationStepData.settings.formie ?? {} %}
-            <p class="burrow-muted">Select Formie forms and tracking mode for Burrow contracts.</p>
+            {% set formieSavedForms = formieConfig.forms ?? {} %}
+            <p class="burrow-muted">
+                Same behavior as Freeform: count-only sends a minimal envelope; custom fields only adds mapped tags/properties (never full submission element data).
+            </p>
             <form method="post" action="{{ actionUrl('burrow/settings/save-integration-step') }}">
                 {{ csrfInput() }}
                 <input type="hidden" name="integration" value="formie">
@@ -492,36 +495,174 @@
                     size: 6,
                     maxlength: 10,
                 }) }}
-                <fieldset>
-                    <legend><strong>Tracking mode</strong></legend>
-                    {{ forms.radio({
-                        name: 'formieMode',
-                        value: 'off',
-                        checked: (formieConfig.mode ?? 'count_only') == 'off',
-                        label: 'Off'
-                    }) }}<br>
-                    {{ forms.radio({
-                        name: 'formieMode',
-                        value: 'count_only',
-                        checked: (formieConfig.mode ?? 'count_only') == 'count_only',
-                        label: 'Count-only'
-                    }) }}
-                </fieldset>
-                <div style="margin-top: 14px;">
-                    <strong>Forms</strong>
-                    {% if integrationStepData.formieForms is empty %}
-                        <p class="burrow-muted">No Formie forms were found.</p>
-                    {% else %}
-                        <div class="burrow-form-list">
-                            {% for form in integrationStepData.formieForms %}
-                                <label>
-                                    <input type="checkbox" name="formieFormIds[]" value="{{ form.id }}" {{ form.id in (formieConfig.formIds ?? []) ? 'checked' : '' }}>
-                                    {{ form.name }} <span class="burrow-muted">({{ form.handle ?: form.id }})</span>
-                                </label>
-                            {% endfor %}
+                {% if integrationStepData.formieForms is empty %}
+                    <p class="burrow-muted">No Formie forms were found.</p>
+                {% else %}
+                    {% for form in integrationStepData.formieForms %}
+                        {% set formConfig = formieSavedForms[form.id] ?? {} %}
+                        {% set formMode = formConfig.mode ?? (form.id in (formieConfig.formIds ?? []) ? (formieConfig.mode ?? 'count_only') : 'off') %}
+                        {% set isCustomMode = formMode == 'custom_fields' %}
+                        {% set formFields = integrationStepData.formieFieldsByFormId[form.id] ?? [] %}
+                        {% set mappedFields = formConfig.fields ?? {} %}
+                        <div class="burrow-formie-form-block" data-form-id="{{ form.id }}">
+                            <h3>{{ form.name }}</h3>
+                            <fieldset style="margin:0 0 10px 0;">
+                                <legend><strong>Tracking mode</strong></legend>
+                                <span style="margin-right:14px;">{{ forms.radio({
+                                    class: 'burrow-formie-mode-radio',
+                                    name: 'formie[forms][' ~ form.id ~ '][mode]',
+                                    value: 'off',
+                                    checked: formMode == 'off',
+                                    label: 'Off'
+                                }) }}</span>
+                                <span style="margin-right:14px;">{{ forms.radio({
+                                    class: 'burrow-formie-mode-radio',
+                                    name: 'formie[forms][' ~ form.id ~ '][mode]',
+                                    value: 'count_only',
+                                    checked: formMode == 'count_only',
+                                    label: 'Count-only'
+                                }) }}</span>
+                                <span>{{ forms.radio({
+                                    class: 'burrow-formie-mode-radio',
+                                    name: 'formie[forms][' ~ form.id ~ '][mode]',
+                                    value: 'custom_fields',
+                                    checked: formMode == 'custom_fields',
+                                    label: 'Custom fields'
+                                }) }}</span>
+                            </fieldset>
+                            <input type="hidden" name="formie[forms][{{ form.id }}][externalFormId]" value="{{ form.id }}">
+                            <input type="hidden" name="formie[forms][{{ form.id }}][formName]" value="{{ form.name }}">
+                            {% if formFields is empty %}
+                                <p class="burrow-muted">No fields detected for this form.</p>
+                            {% else %}
+                                <div class="burrow-field-mapping-table-wrap">
+                                    <table class="data fullwidth">
+                                        <thead>
+                                            <tr>
+                                                <th>Include</th>
+                                                <th>Field</th>
+                                                <th>Type</th>
+                                                <th>Canonical Key</th>
+                                                <th>Target</th>
+                                                <th>Display Label</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for field in formFields %}
+                                                {% set fieldConfig = mappedFields[field.externalFieldId] ?? {} %}
+                                                {% set isIncluded = fieldConfig ? true : false %}
+                                                {% set canonicalKey = fieldConfig.canonicalKey ?? field.canonicalKey %}
+                                                {% set target = fieldConfig.target ?? '' %}
+                                                {% set displayLabel = fieldConfig.displayLabelOverride ?? field.sourceLabel %}
+                                                <tr class="{{ isCustomMode ? '' : 'is-disabled' }}">
+                                                    <td>
+                                                        {{ forms.checkbox({
+                                                            id: 'formie-' ~ form.id ~ '-field-' ~ field.externalFieldId ~ '-include',
+                                                            class: 'burrow-formie-field-checkbox',
+                                                            name: 'formie[forms][' ~ form.id ~ '][fields][' ~ field.externalFieldId ~ '][include]',
+                                                            value: 1,
+                                                            checked: isIncluded,
+                                                            disabled: (not isCustomMode),
+                                                            label: ' '
+                                                        }) }}
+                                                    </td>
+                                                    <td>{{ field.sourceLabel }}</td>
+                                                    <td>{{ field.dataType }}</td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][canonicalKey]" value="{{ canonicalKey }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="select">
+                                                            <select name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][target]" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                                <option value="">Select one</option>
+                                                                <option value="properties" {{ target == 'properties' ? 'selected' : '' }}>properties</option>
+                                                                <option value="tags" {{ target == 'tags' ? 'selected' : '' }}>tags</option>
+                                                            </select>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][displayLabelOverride]" value="{{ displayLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                <input type="hidden" name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][externalFieldId]" value="{{ field.externalFieldId }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][sourceLabel]" value="{{ field.sourceLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="formie[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][dataType]" value="{{ field.dataType }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {% endif %}
                         </div>
-                    {% endif %}
-                </div>
+                    {% endfor %}
+                    <script>
+                        (() => {
+                            const forms = Array.from(document.querySelectorAll('.burrow-formie-form-block'));
+                            if (!forms.length) return;
+                            const parentForm = forms[0].closest('form');
+                            forms.forEach((block) => {
+                                const modeInputs = Array.from(block.querySelectorAll('.burrow-formie-mode-radio'));
+                                const fields = Array.from(block.querySelectorAll('.burrow-formie-field-checkbox'));
+                                if (!modeInputs.length) return;
+                                const controls = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap input, .burrow-field-mapping-table-wrap select, .burrow-field-mapping-table-wrap textarea'));
+                                const currentMode = () => {
+                                    const picked = modeInputs.find((input) => input.checked);
+                                    return picked ? picked.value : 'off';
+                                };
+                                const sync = () => {
+                                    const mode = currentMode();
+                                    const fieldsEnabled = mode === 'custom_fields';
+                                    if (!fieldsEnabled) {
+                                        fields.forEach((field) => { field.checked = false; });
+                                    }
+                                    const rows = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap tbody tr'));
+                                    rows.forEach((row) => row.classList.toggle('is-disabled', !fieldsEnabled));
+                                    controls.forEach((control) => {
+                                        if (!fieldsEnabled) {
+                                            control.setAttribute('disabled', 'disabled');
+                                        } else {
+                                            control.removeAttribute('disabled');
+                                        }
+                                    });
+                                };
+                                modeInputs.forEach((input) => input.addEventListener('change', sync));
+                                fields.forEach((field) => field.addEventListener('change', sync));
+                                sync();
+                            });
+                            if (!parentForm) return;
+                            parentForm.addEventListener('submit', (event) => {
+                                for (const block of forms) {
+                                    const selectedMode = block.querySelector('.burrow-formie-mode-radio:checked');
+                                    const mode = selectedMode ? selectedMode.value : 'off';
+                                    if (mode !== 'custom_fields') {
+                                        continue;
+                                    }
+                                    const heading = block.querySelector('h3');
+                                    const formName = heading && heading.textContent ? heading.textContent.trim() : 'This form';
+                                    const includedFields = Array.from(block.querySelectorAll('.burrow-formie-field-checkbox:checked'));
+                                    if (!includedFields.length) {
+                                        event.preventDefault();
+                                        window.alert(formName + ': please include at least one field when using Custom fields mode.');
+                                        return;
+                                    }
+                                    for (const checkbox of includedFields) {
+                                        const row = checkbox.closest('tr');
+                                        const targetSelect = row ? row.querySelector('select[name*="[target]"]') : null;
+                                        if (targetSelect && !targetSelect.value) {
+                                            event.preventDefault();
+                                            window.alert(formName + ': please choose a target for each included field.');
+                                            targetSelect.focus();
+                                            return;
+                                        }
+                                    }
+                                }
+                            });
+                        })();
+                    </script>
+                {% endif %}
                 <div style="margin-top: 16px;">
                     <button class="btn submit">Continue to {{ stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step') }}</button>
                 </div>

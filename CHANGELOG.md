@@ -4,6 +4,18 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.8] - 2026-03-27
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Freeform `custom_fields`:** Stopped merging the full Freeform submission `toArray()` payload into Burrow `properties`. Events now include only the minimal envelope (`formId`, `submissionId`, `submittedAt`, `isBackfill`) plus **field-contract mappings** (tags/properties). `provider` and `formName` remain in **tags** only, not duplicated in `properties`.
+
+### Added
+
+- **Formie parity with Freeform:** Per-form **Off / Count-only / Custom fields** in onboarding, **`getFormieFields()`** for the mapping table, contract sync with real **`custom_fields`** / **`fieldMappings`**, live submission events, and historical backfill all follow the same rules as Freeform (minimal envelope, mapped fields only).
+
 ## [5.3.7] - 2026-03-26
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

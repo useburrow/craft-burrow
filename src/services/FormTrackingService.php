@@ -60,10 +60,10 @@ class FormTrackingService extends Component
             'provider' => 'freeform',
             'formName' => $formName,
         ];
+        // Properties are the Burrow envelope plus contract mappings only — never dump submission->toArray()
+        // (element metadata: token, ip, uid, draft flags, etc. belongs in Craft, not the event payload).
         $properties = [
-            'provider' => 'freeform',
             'formId' => (string)$formId,
-            'formName' => $formName,
             'submissionId' => $submissionId,
             'submittedAt' => $timestamp,
             'isBackfill' => false,
@@ -71,10 +71,6 @@ class FormTrackingService extends Component
 
         $mode = trim((string)($config['mode'] ?? 'count_only'));
         if ($mode === 'custom_fields') {
-            $submissionPayload = $this->extractSubmissionScalarValues($submission);
-            if ($submissionPayload !== []) {
-                $properties = array_merge($submissionPayload, $properties);
-            }
             $mapped = $this->extractMappedSubmissionPayload($submission, is_array($config['fields'] ?? null) ? $config['fields'] : []);
             if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
                 $tags = array_merge($tags, $mapped['tags']);
@@ -113,35 +109,51 @@ class FormTrackingService extends Component
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
         $runtimeState = $plugin->getState()->getState();
-        $selectedFormMap = $this->formieSelectedFormMap($runtimeState);
-        if ($selectedFormMap === []) {
+        $configByFormId = $this->formieConfigsByFormId($runtimeState);
+        if ($configByFormId === []) {
             return;
         }
 
         $formId = $this->extractSubmissionFormId($submission);
-        if ($formId <= 0 || !isset($selectedFormMap[$formId])) {
+        if ($formId <= 0 || !isset($configByFormId[$formId])) {
             return;
         }
 
         $timestamp = $this->normalizeTimestamp($this->objectDateValue($submission, ['dateCreated', 'dateUpdated'])) ?: gmdate('c');
         $submissionId = $this->objectStringValue($submission, ['id']);
-        $formName = $this->extractSubmissionFormName($submission) ?: ('Formie ' . $formId);
+        $config = $configByFormId[$formId];
+
+        $configFormName = trim((string)($config['formName'] ?? ''));
+        $liveFormName = $this->extractSubmissionFormName($submission);
+        $formName = $liveFormName !== '' ? $liveFormName : ($configFormName !== '' ? $configFormName : ('Formie ' . $formId));
+
+        $tags = [
+            'provider' => 'formie',
+            'formName' => $formName,
+        ];
+        $properties = [
+            'formId' => (string)$formId,
+            'submissionId' => $submissionId,
+            'submittedAt' => $timestamp,
+            'isBackfill' => false,
+        ];
+
+        $mode = trim((string)($config['mode'] ?? 'count_only'));
+        if ($mode === 'custom_fields') {
+            $mapped = $this->extractMappedSubmissionPayload($submission, is_array($config['fields'] ?? null) ? $config['fields'] : []);
+            if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
+                $tags = array_merge($tags, $mapped['tags']);
+            }
+            if (!empty($mapped['properties']) && is_array($mapped['properties'])) {
+                $properties = array_merge($properties, $mapped['properties']);
+            }
+        }
 
         $eventEnvelope = $plugin->getBurrowApi()->buildFormsSubmissionEvent($runtimeState, [
             'timestamp' => $timestamp,
             'source' => 'craft-formie',
-            'tags' => [
-                'provider' => 'formie',
-                'formName' => $formName,
-            ],
-            'properties' => [
-                'provider' => 'formie',
-                'formId' => (string)$formId,
-                'formName' => $formName,
-                'submissionId' => $submissionId,
-                'submittedAt' => $timestamp,
-                'isBackfill' => false,
-            ],
+            'tags' => $tags,
+            'properties' => $properties,
         ]);
         if ($eventEnvelope === []) {
             return;
@@ -180,16 +192,50 @@ class FormTrackingService extends Component
         return $byId;
     }
 
-    private function formieSelectedFormMap(array $runtimeState): array
+    private function formieConfigsByFormId(array $runtimeState): array
     {
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
         $formie = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
-        $mode = trim((string)($formie['mode'] ?? 'off'));
-        if (!in_array($mode, ['count_only'], true)) {
+        $globalMode = trim((string)($formie['mode'] ?? 'off'));
+        $forms = is_array($formie['forms'] ?? null) ? $formie['forms'] : [];
+        $byId = [];
+        if ($forms !== []) {
+            foreach ($forms as $key => $form) {
+                if (!is_array($form)) {
+                    continue;
+                }
+                $formId = (int)($form['id'] ?? $key);
+                if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
+                    continue;
+                }
+                $mode = trim((string)($form['mode'] ?? $globalMode));
+                if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
+                    continue;
+                }
+                $byId[$formId] = [
+                    'mode' => $mode,
+                    'formName' => trim((string)($form['formName'] ?? '')) ?: ('Form ' . $formId),
+                    'fields' => is_array($form['fields'] ?? null) ? $form['fields'] : [],
+                ];
+            }
+            return $byId;
+        }
+        if (!in_array($globalMode, ['count_only', 'custom_fields'], true)) {
             return [];
         }
-        $formIds = array_values(array_unique(array_filter(array_map('intval', (array)($formie['formIds'] ?? [])))));
-        return $formIds === [] ? [] : array_fill_keys($formIds, true);
+        $legacyIds = array_values(array_unique(array_filter(array_map('intval', (array)($formie['formIds'] ?? [])))));
+        foreach ($legacyIds as $formId) {
+            if ($formId <= 0) {
+                continue;
+            }
+            $byId[$formId] = [
+                'mode' => $globalMode,
+                'formName' => 'Form ' . $formId,
+                'fields' => [],
+            ];
+        }
+
+        return $byId;
     }
 
     private function extractMappedSubmissionPayload(object $submission, array $mappedFields): array

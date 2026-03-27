@@ -628,9 +628,7 @@ class BackfillService extends Component
                 'formName' => $formDisplayName,
             ];
             $baseProperties = [
-                'provider' => 'freeform',
                 'formId' => (string)$formId,
-                'formName' => $formDisplayName,
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
                 'isBackfill' => true,
@@ -638,10 +636,6 @@ class BackfillService extends Component
             $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
             $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
             if ($mode === 'custom_fields') {
-                $submissionPayload = $this->extractSubmissionScalarValues($row);
-                if (!empty($submissionPayload)) {
-                    $baseProperties = array_merge($submissionPayload, $baseProperties);
-                }
                 $mapped = $this->extractMappedSubmissionPayload($row, is_array($formConfig['fields'] ?? null) ? $formConfig['fields'] : []);
                 if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
                     $baseTags = array_merge($baseTags, $mapped['tags']);
@@ -702,8 +696,9 @@ class BackfillService extends Component
         }
         /** @var class-string<\craft\base\ElementInterface> $submissionClass */
         $submissionClass = $ctx['submissionClass'];
-        $selectedFormIdMap = $ctx['selectedFormIdMap'];
+        $enabledFormIdMap = $ctx['enabledFormIdMap'];
         $formNames = $ctx['formNames'];
+        $formConfigsById = is_array($ctx['formConfigsById'] ?? null) ? $ctx['formConfigsById'] : [];
         $windowStartTs = strtotime($windowStart) ?: 0;
         $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
         try {
@@ -726,7 +721,7 @@ class BackfillService extends Component
                 continue;
             }
             $formId = $this->extractSubmissionFormId($row);
-            if ($formId <= 0 || !isset($selectedFormIdMap[$formId])) {
+            if ($formId <= 0 || !isset($enabledFormIdMap[$formId])) {
                 continue;
             }
             $timestamp = $this->normalizeTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
@@ -739,22 +734,35 @@ class BackfillService extends Component
                 continue;
             }
             $submissionId = $this->objectStringValue($row, ['id']);
-            $formDisplayName = (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form'));
-            $baseProperties = [
+            $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
+            $configName = trim((string)($formConfig['formName'] ?? ''));
+            $formDisplayName = $configName !== ''
+                ? $configName
+                : (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form'));
+            $baseTags = [
                 'provider' => 'formie',
-                'formId' => (string)$formId,
                 'formName' => $formDisplayName,
+            ];
+            $baseProperties = [
+                'formId' => (string)$formId,
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
                 'isBackfill' => true,
             ];
+            $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
+            if ($mode === 'custom_fields') {
+                $mapped = $this->extractMappedSubmissionPayload($row, is_array($formConfig['fields'] ?? null) ? $formConfig['fields'] : []);
+                if (!empty($mapped['tags']) && is_array($mapped['tags'])) {
+                    $baseTags = array_merge($baseTags, $mapped['tags']);
+                }
+                if (!empty($mapped['properties']) && is_array($mapped['properties'])) {
+                    $baseProperties = array_merge($baseProperties, $mapped['properties']);
+                }
+            }
             $event = $api->buildFormsSubmissionEvent($runtimeState, [
                 'timestamp' => $timestamp,
                 'source' => 'craft-formie',
-                'tags' => [
-                    'provider' => 'formie',
-                    'formName' => $formDisplayName,
-                ],
+                'tags' => $baseTags,
                 'properties' => $baseProperties,
             ]);
             if (!empty($event)) {
@@ -1001,7 +1009,7 @@ class BackfillService extends Component
         }
         /** @var class-string<\craft\base\ElementInterface> $submissionClass */
         $submissionClass = $ctx['submissionClass'];
-        $formIds = array_map('intval', array_keys($ctx['selectedFormIdMap']));
+        $formIds = array_map('intval', array_keys($ctx['enabledFormIdMap']));
         if ($formIds === []) {
             return 0;
         }
@@ -1104,26 +1112,22 @@ class BackfillService extends Component
     /**
      * @return null|array{
      *     submissionClass: class-string,
-     *     selectedFormIdMap: array<int, bool>,
-     *     formNames: array<int, string>
+     *     enabledFormIdMap: array<int, bool>,
+     *     formNames: array<int, string>,
+     *     formConfigsById: array<int, array<string, mixed>>
      * }
      */
     private function prepareFormieBackfillContext(array $runtimeState): ?array
     {
-        $config = is_array($runtimeState['integrationSettings']['formie'] ?? null)
+        $root = is_array($runtimeState['integrationSettings']['formie'] ?? null)
             ? $runtimeState['integrationSettings']['formie']
             : [];
-        $mode = trim((string)($config['mode'] ?? 'count_only'));
-        if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
-            return null;
-        }
         $submissionClass = '\verbb\formie\elements\Submission';
         if (!class_exists($submissionClass) || !method_exists($submissionClass, 'find')) {
             return null;
         }
 
-        $selectedFormIds = array_values(array_filter(array_map('intval', (array)($config['formIds'] ?? []))));
-        $formNames = [];
+        $liveFormNames = [];
         foreach (\burrow\Burrow\Plugin::getInstance()->getIntegrations()->getFormieForms() as $form) {
             if (!is_array($form)) {
                 continue;
@@ -1132,19 +1136,65 @@ class BackfillService extends Component
             if ($id <= 0) {
                 continue;
             }
-            $formNames[$id] = (string)($form['name'] ?? ('Form ' . $id));
+            $liveFormNames[$id] = (string)($form['name'] ?? ('Form ' . $id));
         }
-        if ($selectedFormIds === [] && $formNames !== []) {
-            $selectedFormIds = array_keys($formNames);
+
+        $table = is_array($root['forms'] ?? null) ? $root['forms'] : [];
+        $enabledFormIds = [];
+        $formNames = [];
+        $formConfigsById = [];
+
+        if ($table !== []) {
+            foreach ($table as $formId => $formConfig) {
+                if (!is_array($formConfig)) {
+                    continue;
+                }
+                $mode = trim((string)($formConfig['mode'] ?? 'off'));
+                if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
+                    continue;
+                }
+                $stringFormId = trim((string)$formId);
+                if ($stringFormId === '') {
+                    continue;
+                }
+                $intFormId = (int)$stringFormId;
+                $enabledFormIds[] = $intFormId;
+                $configName = trim((string)($formConfig['formName'] ?? ''));
+                $formNames[$intFormId] = $configName !== '' ? $configName : ($liveFormNames[$intFormId] ?? ('Form ' . $stringFormId));
+                $formConfigsById[$intFormId] = $formConfig;
+            }
+        } else {
+            $legacyMode = trim((string)($root['mode'] ?? 'count_only'));
+            if (!in_array($legacyMode, ['count_only', 'custom_fields'], true)) {
+                return null;
+            }
+            $selectedFormIds = array_values(array_filter(array_map('intval', (array)($root['formIds'] ?? []))));
+            if ($selectedFormIds === [] && $liveFormNames !== []) {
+                $selectedFormIds = array_keys($liveFormNames);
+            }
+            foreach ($selectedFormIds as $intFormId) {
+                if ($intFormId <= 0) {
+                    continue;
+                }
+                $enabledFormIds[] = $intFormId;
+                $formNames[$intFormId] = $liveFormNames[$intFormId] ?? ('Form ' . $intFormId);
+                $formConfigsById[$intFormId] = [
+                    'mode' => $legacyMode,
+                    'formName' => $formNames[$intFormId],
+                    'fields' => [],
+                ];
+            }
         }
-        if ($selectedFormIds === []) {
+
+        if ($enabledFormIds === []) {
             return null;
         }
 
         return [
             'submissionClass' => $submissionClass,
-            'selectedFormIdMap' => array_fill_keys($selectedFormIds, true),
+            'enabledFormIdMap' => array_fill_keys($enabledFormIds, true),
             'formNames' => $formNames,
+            'formConfigsById' => $formConfigsById,
         ];
     }
 
@@ -1166,9 +1216,19 @@ class BackfillService extends Component
         }
 
         $formie = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
+        $formieForms = is_array($formie['forms'] ?? null) ? $formie['forms'] : [];
+        foreach ($formieForms as $cfg) {
+            if (!is_array($cfg)) {
+                continue;
+            }
+            $m = trim((string)($cfg['mode'] ?? 'off'));
+            if (in_array($m, ['count_only', 'custom_fields'], true)) {
+                return true;
+            }
+        }
         $formieMode = trim((string)($formie['mode'] ?? 'count_only'));
         $formieIds = array_values(array_filter(array_map('strval', (array)($formie['formIds'] ?? []))));
-        if (in_array($formieMode, ['count_only', 'custom_fields'], true)) {
+        if (in_array($formieMode, ['count_only', 'custom_fields'], true) && $formieIds !== []) {
             return true;
         }
 

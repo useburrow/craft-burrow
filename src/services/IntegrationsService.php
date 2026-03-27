@@ -212,6 +212,107 @@ class IntegrationsService extends Component
     }
 
     /**
+     * Discover Formie fields for mapping (handles are used as submission value keys).
+     *
+     * @return array<int,array<string,string>>
+     */
+    public function getFormieFields(string $formId): array
+    {
+        $fields = [];
+        if ($formId === '') {
+            return $fields;
+        }
+        $formClass = '\verbb\formie\elements\Form';
+        if (!class_exists($formClass) || !method_exists($formClass, 'find')) {
+            return $fields;
+        }
+        try {
+            $form = $formClass::find()->id((int)$formId)->status(null)->one();
+            if ($form === null) {
+                return $fields;
+            }
+            $candidates = [];
+            if (method_exists($form, 'getCustomFields')) {
+                $raw = $form->getCustomFields();
+                if (is_array($raw)) {
+                    $candidates = $raw;
+                }
+            }
+            if ($candidates === [] && method_exists($form, 'getFieldLayout')) {
+                $layout = $form->getFieldLayout();
+                if ($layout !== null && method_exists($layout, 'getCustomFields')) {
+                    $custom = $layout->getCustomFields();
+                    if (is_array($custom)) {
+                        $candidates = $custom;
+                    }
+                }
+            }
+            if ($candidates === [] && method_exists($form, 'getPages')) {
+                foreach ($form->getPages() as $page) {
+                    if (!is_object($page) || !method_exists($page, 'getRows')) {
+                        continue;
+                    }
+                    foreach ($page->getRows() as $row) {
+                        if (!is_object($row) || !method_exists($row, 'getFields')) {
+                            continue;
+                        }
+                        foreach ($row->getFields() as $formField) {
+                            $candidates[] = $formField;
+                        }
+                    }
+                }
+            }
+            foreach ($candidates as $unionField) {
+                if (!is_object($unionField)) {
+                    continue;
+                }
+                $inner = $unionField;
+                if (method_exists($unionField, 'getField')) {
+                    try {
+                        $maybe = $unionField->getField();
+                        if (is_object($maybe)) {
+                            $inner = $maybe;
+                        }
+                    } catch (\Throwable) {
+                    }
+                }
+                $handle = '';
+                if (method_exists($inner, 'getHandle')) {
+                    $handle = trim((string)$inner->getHandle());
+                } elseif (isset($inner->handle)) {
+                    $handle = trim((string)$inner->handle);
+                }
+                if ($handle === '') {
+                    continue;
+                }
+                $label = $handle;
+                if (method_exists($inner, 'name') && is_string($inner->name) && trim($inner->name) !== '') {
+                    $label = trim($inner->name);
+                } elseif (method_exists($inner, 'getName')) {
+                    $label = trim((string)$inner->getName()) ?: $handle;
+                } elseif (method_exists($unionField, 'getLabel')) {
+                    $label = trim((string)$unionField->getLabel()) ?: $handle;
+                }
+                $classBase = basename(str_replace('\\', '/', get_class($inner)));
+                $dataType = strtolower((string)preg_replace('/Field$/', '', $classBase));
+                if ($dataType === '') {
+                    $dataType = 'string';
+                }
+                $fields[] = [
+                    'externalFieldId' => $handle,
+                    'sourceLabel' => $label !== '' ? $label : $handle,
+                    'dataType' => $dataType,
+                    'canonicalKey' => $this->labelToCanonicalKey($label !== '' ? $label : $handle),
+                ];
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return $fields;
+    }
+
+    /**
      * @param string[] $selected
      * @return array<string,mixed>
      */
@@ -313,26 +414,75 @@ class IntegrationsService extends Component
 
         $formieConfig = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
         $formiePrefix = strtoupper(trim((string)($formieConfig['prefix'] ?? ''))) ?: 'FRM';
-        $formieMode = trim((string)($formieConfig['mode'] ?? 'off'));
-        $normalizedFormieMode = $formieMode === 'custom_fields' ? 'count_only' : $formieMode;
-        $formieIds = array_values(array_filter(array_map('strval', (array)($formieConfig['formIds'] ?? []))));
-        if (in_array($normalizedFormieMode, ['count_only'], true)) {
-            $formiePrefixLower = strtolower($formiePrefix) . '_';
-            foreach ($formieIds as $formId) {
-                $known = $formieForms[$formId] ?? null;
-                $formName = trim((string)($known['name'] ?? ('Formie ' . $formId)));
+        $formiePrefixLower = strtolower($formiePrefix) . '_';
+        $formieFormsConfig = is_array($formieConfig['forms'] ?? null) ? $formieConfig['forms'] : [];
+        if ($formieFormsConfig !== []) {
+            foreach ($formieFormsConfig as $formId => $config) {
+                if (!is_array($config)) {
+                    continue;
+                }
+                $mode = trim((string)($config['mode'] ?? 'off'));
+                if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true) || $mode === 'off') {
+                    continue;
+                }
+                $fields = is_array($config['fields'] ?? null) ? $config['fields'] : [];
+                $mappings = [];
+                if ($mode === 'custom_fields') {
+                    foreach ($fields as $field) {
+                        if (!is_array($field)) {
+                            continue;
+                        }
+                        $target = trim((string)($field['target'] ?? ''));
+                        if (!in_array($target, ['properties', 'tags'], true)) {
+                            continue;
+                        }
+                        $mappings[] = [
+                            'externalFieldId' => trim((string)($field['externalFieldId'] ?? '')),
+                            'sourceLabel' => trim((string)($field['sourceLabel'] ?? '')),
+                            'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
+                            'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
+                            'target' => $target,
+                            'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
+                        ];
+                    }
+                }
+                $known = $formieForms[(string)$formId] ?? null;
+                $externalId = trim((string)($config['externalFormId'] ?? $formId));
+                $configFormName = trim((string)($config['formName'] ?? ''));
+                $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Formie ' . $formId));
                 $formHandle = trim((string)($known['handle'] ?? ''));
                 $contracts[] = [
                     'provider' => 'formie',
-                    'externalFormId' => str_starts_with($formId, $formiePrefixLower) ? $formId : ($formiePrefixLower . $formId),
+                    'externalFormId' => str_starts_with($externalId, $formiePrefixLower) ? $externalId : ($formiePrefixLower . $externalId),
                     'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
                     'formName' => $formName,
                     'enabled' => true,
-                    'countOnly' => true,
-                    'mode' => $normalizedFormieMode,
-                    'fieldMappings' => [],
+                    'countOnly' => $mode !== 'custom_fields',
+                    'mode' => $mode,
+                    'fieldMappings' => $mappings,
                     'icon' => null,
                 ];
+            }
+        } else {
+            $formieMode = trim((string)($formieConfig['mode'] ?? 'count_only'));
+            $formieIds = array_values(array_filter(array_map('strval', (array)($formieConfig['formIds'] ?? []))));
+            if (in_array($formieMode, ['count_only', 'custom_fields'], true)) {
+                foreach ($formieIds as $formId) {
+                    $known = $formieForms[$formId] ?? null;
+                    $formName = trim((string)($known['name'] ?? ('Formie ' . $formId)));
+                    $formHandle = trim((string)($known['handle'] ?? ''));
+                    $contracts[] = [
+                        'provider' => 'formie',
+                        'externalFormId' => str_starts_with($formId, $formiePrefixLower) ? $formId : ($formiePrefixLower . $formId),
+                        'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
+                        'formName' => $formName,
+                        'enabled' => true,
+                        'countOnly' => $formieMode !== 'custom_fields',
+                        'mode' => $formieMode,
+                        'fieldMappings' => [],
+                        'icon' => null,
+                    ];
+                }
             }
         }
 

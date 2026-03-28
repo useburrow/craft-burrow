@@ -161,7 +161,7 @@ class Plugin extends CraftPlugin
         $item = parent::getCpNavItem();
 
         $item['label'] = $this->getSettings()->pluginName;
-        $item['url'] = 'burrow';
+        $item['url'] = 'burrow/dashboard';
 
         $item['subnav']['dashboard'] = [
             'label' => Craft::t('burrow', 'Dashboard'),
@@ -186,7 +186,7 @@ class Plugin extends CraftPlugin
             UrlManager::EVENT_REGISTER_CP_URL_RULES,
             static function(RegisterUrlRulesEvent $event): void {
                 $event->rules = array_merge($event->rules, [
-                    'burrow' => 'burrow/settings/index',
+                    'burrow' => 'burrow/settings/dashboard',
                     'burrow/dashboard' => 'burrow/settings/dashboard',
                     'burrow/backfill-probe' => 'burrow/settings/backfill-probe',
                     'burrow/outbox' => 'burrow/settings/outbox',

@@ -161,7 +161,7 @@ class Plugin extends CraftPlugin
         $item = parent::getCpNavItem();
 
         $item['label'] = $this->getSettings()->pluginName;
-        $item['url'] = 'burrow/dashboard';
+        $item['url'] = 'burrow';
 
         $item['subnav']['dashboard'] = [
             'label' => Craft::t('burrow', 'Dashboard'),

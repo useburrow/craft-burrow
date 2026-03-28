@@ -57,16 +57,14 @@ class FormTrackingService extends Component
         $formName = $liveFormName !== '' ? $liveFormName : ($configFormName !== '' ? $configFormName : ('Form ' . $formId));
 
         $tags = [
-            'provider' => 'freeform',
-            'formName' => $formName,
+            'formId' => 'ff_' . $formId,
         ];
         // Properties are the Burrow envelope plus contract mappings only — never dump submission->toArray()
         // (element metadata: token, ip, uid, draft flags, etc. belongs in Craft, not the event payload).
         $properties = [
-            'formId' => (string)$formId,
+            'formName' => $formName,
             'submissionId' => $submissionId,
             'submittedAt' => $timestamp,
-            'isBackfill' => false,
         ];
 
         $mode = trim((string)($config['mode'] ?? 'count_only'));
@@ -128,14 +126,12 @@ class FormTrackingService extends Component
         $formName = $liveFormName !== '' ? $liveFormName : ($configFormName !== '' ? $configFormName : ('Formie ' . $formId));
 
         $tags = [
-            'provider' => 'formie',
-            'formName' => $formName,
+            'formId' => 'frm_' . $formId,
         ];
         $properties = [
-            'formId' => (string)$formId,
+            'formName' => $formName,
             'submissionId' => $submissionId,
             'submittedAt' => $timestamp,
-            'isBackfill' => false,
         ];
 
         $mode = trim((string)($config['mode'] ?? 'count_only'));
@@ -168,7 +164,6 @@ class FormTrackingService extends Component
     {
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
         $freeform = is_array($integrationSettings['freeform'] ?? null) ? $integrationSettings['freeform'] : [];
-        $globalMode = trim((string)($freeform['mode'] ?? 'off'));
         $forms = is_array($freeform['forms'] ?? null) ? $freeform['forms'] : [];
         $byId = [];
         foreach ($forms as $key => $form) {
@@ -179,7 +174,7 @@ class FormTrackingService extends Component
             if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
                 continue;
             }
-            $mode = trim((string)($form['mode'] ?? $globalMode));
+            $mode = trim((string)($form['mode'] ?? 'off'));
             if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
                 continue;
             }
@@ -196,42 +191,24 @@ class FormTrackingService extends Component
     {
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
         $formie = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
-        $globalMode = trim((string)($formie['mode'] ?? 'off'));
         $forms = is_array($formie['forms'] ?? null) ? $formie['forms'] : [];
         $byId = [];
-        if ($forms !== []) {
-            foreach ($forms as $key => $form) {
-                if (!is_array($form)) {
-                    continue;
-                }
-                $formId = (int)($form['id'] ?? $key);
-                if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
-                    continue;
-                }
-                $mode = trim((string)($form['mode'] ?? $globalMode));
-                if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
-                    continue;
-                }
-                $byId[$formId] = [
-                    'mode' => $mode,
-                    'formName' => trim((string)($form['formName'] ?? '')) ?: ('Form ' . $formId),
-                    'fields' => is_array($form['fields'] ?? null) ? $form['fields'] : [],
-                ];
+        foreach ($forms as $key => $form) {
+            if (!is_array($form)) {
+                continue;
             }
-            return $byId;
-        }
-        if (!in_array($globalMode, ['count_only', 'custom_fields'], true)) {
-            return [];
-        }
-        $legacyIds = array_values(array_unique(array_filter(array_map('intval', (array)($formie['formIds'] ?? [])))));
-        foreach ($legacyIds as $formId) {
-            if ($formId <= 0) {
+            $formId = (int)($form['id'] ?? $key);
+            if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
+                continue;
+            }
+            $mode = trim((string)($form['mode'] ?? 'off'));
+            if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
                 continue;
             }
             $byId[$formId] = [
-                'mode' => $globalMode,
-                'formName' => 'Form ' . $formId,
-                'fields' => [],
+                'mode' => $mode,
+                'formName' => trim((string)($form['formName'] ?? '')) ?: ('Form ' . $formId),
+                'fields' => is_array($form['fields'] ?? null) ? $form['fields'] : [],
             ];
         }
 

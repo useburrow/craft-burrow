@@ -626,14 +626,12 @@ class BackfillService extends Component
             $submissionId = $this->objectStringValue($row, ['id']);
             $formDisplayName = (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form'));
             $baseTags = [
-                'provider' => 'freeform',
-                'formName' => $formDisplayName,
+                'formId' => 'ff_' . $formId,
             ];
             $baseProperties = [
-                'formId' => (string)$formId,
+                'formName' => $formDisplayName,
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
-                'isBackfill' => true,
             ];
             $formConfig = is_array($formConfigsById[$formId] ?? null) ? $formConfigsById[$formId] : [];
             $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
@@ -742,14 +740,12 @@ class BackfillService extends Component
                 ? $configName
                 : (string)($formNames[$formId] ?? ($formId > 0 ? ('Form ' . $formId) : 'Unknown Form'));
             $baseTags = [
-                'provider' => 'formie',
-                'formName' => $formDisplayName,
+                'formId' => 'frm_' . $formId,
             ];
             $baseProperties = [
-                'formId' => (string)$formId,
+                'formName' => $formDisplayName,
                 'submissionId' => $submissionId,
                 'submittedAt' => $timestamp,
-                'isBackfill' => true,
             ];
             $mode = trim((string)($formConfig['mode'] ?? 'count_only'));
             if ($mode === 'custom_fields') {
@@ -1176,46 +1172,23 @@ class BackfillService extends Component
         $formNames = [];
         $formConfigsById = [];
 
-        if ($table !== []) {
-            foreach ($table as $formId => $formConfig) {
-                if (!is_array($formConfig)) {
-                    continue;
-                }
-                $mode = trim((string)($formConfig['mode'] ?? 'off'));
-                if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
-                    continue;
-                }
-                $stringFormId = trim((string)$formId);
-                if ($stringFormId === '') {
-                    continue;
-                }
-                $intFormId = (int)$stringFormId;
-                $enabledFormIds[] = $intFormId;
-                $configName = trim((string)($formConfig['formName'] ?? ''));
-                $formNames[$intFormId] = $configName !== '' ? $configName : ($liveFormNames[$intFormId] ?? ('Form ' . $stringFormId));
-                $formConfigsById[$intFormId] = $formConfig;
+        foreach ($table as $formId => $formConfig) {
+            if (!is_array($formConfig)) {
+                continue;
             }
-        } else {
-            $legacyMode = trim((string)($root['mode'] ?? 'count_only'));
-            if (!in_array($legacyMode, ['count_only', 'custom_fields'], true)) {
-                return null;
+            $mode = trim((string)($formConfig['mode'] ?? 'off'));
+            if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
+                continue;
             }
-            $selectedFormIds = array_values(array_filter(array_map('intval', (array)($root['formIds'] ?? []))));
-            if ($selectedFormIds === [] && $liveFormNames !== []) {
-                $selectedFormIds = array_keys($liveFormNames);
+            $stringFormId = trim((string)$formId);
+            if ($stringFormId === '') {
+                continue;
             }
-            foreach ($selectedFormIds as $intFormId) {
-                if ($intFormId <= 0) {
-                    continue;
-                }
-                $enabledFormIds[] = $intFormId;
-                $formNames[$intFormId] = $liveFormNames[$intFormId] ?? ('Form ' . $intFormId);
-                $formConfigsById[$intFormId] = [
-                    'mode' => $legacyMode,
-                    'formName' => $formNames[$intFormId],
-                    'fields' => [],
-                ];
-            }
+            $intFormId = (int)$stringFormId;
+            $enabledFormIds[] = $intFormId;
+            $configName = trim((string)($formConfig['formName'] ?? ''));
+            $formNames[$intFormId] = $configName !== '' ? $configName : ($liveFormNames[$intFormId] ?? ('Form ' . $stringFormId));
+            $formConfigsById[$intFormId] = $formConfig;
         }
 
         if ($enabledFormIds === []) {
@@ -1257,11 +1230,6 @@ class BackfillService extends Component
             if (in_array($m, ['count_only', 'custom_fields'], true)) {
                 return true;
             }
-        }
-        $formieMode = trim((string)($formie['mode'] ?? 'count_only'));
-        $formieIds = array_values(array_filter(array_map('strval', (array)($formie['formIds'] ?? []))));
-        if (in_array($formieMode, ['count_only', 'custom_fields'], true) && $formieIds !== []) {
-            return true;
         }
 
         return false;
@@ -1937,7 +1905,6 @@ class BackfillService extends Component
                 $samples[] = [
                     'id' => $this->objectStringValue($order, ['id']),
                     'number' => $this->objectStringValue($order, ['number']),
-                    'reference' => $this->objectStringValue($order, ['reference', 'shortNumber']),
                     'statusLabel' => $statusLabel,
                     'statusHandle' => $statusHandle,
                     'statusRaw' => $rawStatus,

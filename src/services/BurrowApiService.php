@@ -285,7 +285,8 @@ class BurrowApiService extends Component
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
                 true,
-                false
+                false,
+                120
             );
 
             $request = new \Burrow\Sdk\Contracts\BackfillEventsRequest(
@@ -308,7 +309,7 @@ class BurrowApiService extends Component
                 $request,
                 new \Burrow\Sdk\Client\BackfillOptions(
                     batchSize: 100,
-                    concurrency: 2,
+                    concurrency: 1,
                     maxAttempts: 3
                 )
             );
@@ -1077,14 +1078,15 @@ class BurrowApiService extends Component
         array $sdkState = [],
         array $ingestionKey = [],
         bool $dispatchClient = false,
-        bool $ignoreSdkStateIngestion = false
+        bool $ignoreSdkStateIngestion = false,
+        int $httpTimeoutSeconds = 8
     ): \Burrow\Sdk\Client\BurrowClient
     {
         if (!$this->isSdkAvailable()) {
             throw new \RuntimeException('Burrow SDK not found. Install package "useburrow/sdk-php" to use Burrow onboarding.');
         }
 
-        $transport = new \Burrow\Sdk\Transport\CurlHttpTransport(8);
+        $transport = new \Burrow\Sdk\Transport\CurlHttpTransport(max(1, $httpTimeoutSeconds));
         $state = is_array($sdkState) ? $sdkState : [];
         if ($ignoreSdkStateIngestion) {
             $state['ingestionKey'] = '';

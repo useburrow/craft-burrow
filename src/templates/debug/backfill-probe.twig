@@ -9,6 +9,18 @@
 ] %}
 
 {% block content %}
+    <style>
+        /* Wide probe grids (many columns / long IDs): scroll inside CP content, don’t spill past layout. */
+        .burrow-probe-table-scroll {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 14px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .burrow-probe-table-scroll table.data {
+            margin-bottom: 0;
+        }
+    </style>
     <h2>Backfill Probe</h2>
     <p class="light">This is a diagnostics view to verify native query visibility before event submission.</p>
 
@@ -63,7 +75,8 @@
 
         {% if key == 'commerce' and (section.statusBreakdown ?? []) is not empty %}
             <h4 style="margin: 10px 0 6px;">Orders by status (in window)</h4>
-            <table class="data fullwidth" style="max-width: 600px; margin-bottom: 14px;">
+            <div class="burrow-probe-table-scroll" style="max-width: 600px;">
+            <table class="data fullwidth">
                 <thead>
                     <tr><th>Status handle</th><th style="text-align:right">Orders</th><th style="text-align:right">Revenue</th></tr>
                 </thead>
@@ -82,13 +95,15 @@
                 </tr>
                 </tbody>
             </table>
+            </div>
         {% endif %}
 
         {% set samples = section.samples ?? [] %}
         {% if samples is empty %}
             <p class="light">No sample records.</p>
         {% else %}
-            <table class="data fullwidth" style="max-width: 900px; margin-bottom: 14px;">
+            <div class="burrow-probe-table-scroll">
+            <table class="data fullwidth">
                 <thead>
                 <tr>
                     {% for column, value in samples[0] %}
@@ -106,6 +121,7 @@
                 {% endfor %}
                 </tbody>
             </table>
+            </div>
         {% endif %}
     {% endfor %}
 {% endblock %}

@@ -582,76 +582,45 @@ class SettingsController extends Controller
             $payload = (array)Craft::$app->getRequest()->getBodyParam('formie', []);
             $formsPayload = is_array($payload['forms'] ?? null) ? (array)$payload['forms'] : [];
             $normalizedForms = [];
-            if ($formsPayload !== []) {
-                foreach ($formsPayload as $formId => $formConfig) {
-                    if (!is_array($formConfig)) {
+            foreach ($formsPayload as $formId => $formConfig) {
+                if (!is_array($formConfig)) {
+                    continue;
+                }
+                $mode = trim((string)($formConfig['mode'] ?? 'off'));
+                if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true)) {
+                    $mode = 'off';
+                }
+                $fieldsPayload = is_array($formConfig['fields'] ?? null) ? (array)$formConfig['fields'] : [];
+                $normalizedFields = [];
+                foreach ($fieldsPayload as $fieldId => $fieldConfig) {
+                    if (!is_array($fieldConfig) || empty($fieldConfig['include'])) {
                         continue;
                     }
-                    $mode = trim((string)($formConfig['mode'] ?? 'off'));
-                    if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true)) {
-                        $mode = 'off';
-                    }
-                    $fieldsPayload = is_array($formConfig['fields'] ?? null) ? (array)$formConfig['fields'] : [];
-                    $normalizedFields = [];
-                    foreach ($fieldsPayload as $fieldId => $fieldConfig) {
-                        if (!is_array($fieldConfig) || empty($fieldConfig['include'])) {
-                            continue;
-                        }
-                        $target = trim((string)($fieldConfig['target'] ?? ''));
-                        $normalizedFields[(string)$fieldId] = [
-                            'externalFieldId' => trim((string)($fieldConfig['externalFieldId'] ?? $fieldId)),
-                            'sourceLabel' => trim((string)($fieldConfig['sourceLabel'] ?? '')),
-                            'dataType' => trim((string)($fieldConfig['dataType'] ?? 'string')),
-                            'canonicalKey' => trim((string)($fieldConfig['canonicalKey'] ?? '')),
-                            'target' => in_array($target, ['properties', 'tags'], true) ? $target : '',
-                            'displayLabelOverride' => trim((string)($fieldConfig['displayLabelOverride'] ?? '')),
-                        ];
-                    }
-                    $normalizedForms[(string)$formId] = [
-                        'externalFormId' => trim((string)($formConfig['externalFormId'] ?? $formId)),
-                        'formName' => trim((string)($formConfig['formName'] ?? '')),
-                        'mode' => $mode,
-                        'fields' => $normalizedFields,
+                    $target = trim((string)($fieldConfig['target'] ?? ''));
+                    $normalizedFields[(string)$fieldId] = [
+                        'externalFieldId' => trim((string)($fieldConfig['externalFieldId'] ?? $fieldId)),
+                        'sourceLabel' => trim((string)($fieldConfig['sourceLabel'] ?? '')),
+                        'dataType' => trim((string)($fieldConfig['dataType'] ?? 'string')),
+                        'canonicalKey' => trim((string)($fieldConfig['canonicalKey'] ?? '')),
+                        'target' => in_array($target, ['properties', 'tags'], true) ? $target : '',
+                        'displayLabelOverride' => trim((string)($fieldConfig['displayLabelOverride'] ?? '')),
                     ];
                 }
-            } else {
-                $selectedForms = (array)Craft::$app->getRequest()->getBodyParam('formieFormIds', []);
-                $selectedForms = array_values(array_filter(array_map('strval', $selectedForms)));
-                $legacyMode = trim((string)Craft::$app->getRequest()->getBodyParam('formieMode', 'count_only'));
-                if (!in_array($legacyMode, ['off', 'count_only', 'custom_fields'], true)) {
-                    $legacyMode = 'count_only';
-                }
-                foreach ($selectedForms as $fid) {
-                    $normalizedForms[(string)$fid] = [
-                        'externalFormId' => $fid,
-                        'formName' => '',
-                        'mode' => $legacyMode,
-                        'fields' => [],
-                    ];
-                }
+                $normalizedForms[(string)$formId] = [
+                    'externalFormId' => trim((string)($formConfig['externalFormId'] ?? $formId)),
+                    'formName' => trim((string)($formConfig['formName'] ?? '')),
+                    'mode' => $mode,
+                    'fields' => $normalizedFields,
+                ];
             }
             $formiePrefix = strtoupper(trim((string)Craft::$app->getRequest()->getBodyParam('formiePrefix', 'FRM')));
             if ($formiePrefix === '') {
                 $formiePrefix = 'FRM';
             }
-            $enabledFormIds = [];
-            foreach ($normalizedForms as $fid => $fc) {
-                if (!is_array($fc)) {
-                    continue;
-                }
-                $m = trim((string)($fc['mode'] ?? 'off'));
-                if (in_array($m, ['count_only', 'custom_fields'], true)) {
-                    $enabledFormIds[] = (string)$fid;
-                }
-            }
             $integrationSettings['formie'] = [
                 'prefix' => $formiePrefix,
-                'formIds' => $enabledFormIds,
                 'forms' => $normalizedForms,
             ];
-            if ($formsPayload === []) {
-                $integrationSettings['formie']['mode'] = $legacyMode;
-            }
         } elseif ($integration === 'commerce') {
             $mode = trim((string)Craft::$app->getRequest()->getBodyParam('commerceMode', 'track'));
             if (!in_array($mode, ['track', 'off'], true)) {

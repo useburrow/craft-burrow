@@ -453,10 +453,29 @@ class IntegrationsService extends Component
                         'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
                         'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
                         'target' => $target,
+                        'reportable' => $target === 'tags',
                         'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
                     ];
                 }
             }
+            $mappings[] = [
+                'externalFieldId' => 'submission_id',
+                'sourceLabel' => 'Submission ID',
+                'dataType' => 'string',
+                'canonicalKey' => 'submissionId',
+                'target' => 'properties',
+                'reportable' => false,
+                'displayLabelOverride' => '',
+            ];
+            $mappings[] = [
+                'externalFieldId' => 'submitted_at',
+                'sourceLabel' => 'Submitted At',
+                'dataType' => 'string',
+                'canonicalKey' => 'submittedAt',
+                'target' => 'properties',
+                'reportable' => false,
+                'displayLabelOverride' => '',
+            ];
             $known = $freeformForms[(string)$formId] ?? null;
             $externalId = trim((string)($config['externalFormId'] ?? $formId));
             $configFormName = trim((string)($config['formName'] ?? ''));
@@ -480,74 +499,70 @@ class IntegrationsService extends Component
         $formiePrefix = strtoupper(trim((string)($formieConfig['prefix'] ?? ''))) ?: 'FRM';
         $formiePrefixLower = strtolower($formiePrefix) . '_';
         $formieFormsConfig = is_array($formieConfig['forms'] ?? null) ? $formieConfig['forms'] : [];
-        if ($formieFormsConfig !== []) {
-            foreach ($formieFormsConfig as $formId => $config) {
-                if (!is_array($config)) {
-                    continue;
-                }
-                $mode = trim((string)($config['mode'] ?? 'off'));
-                if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true) || $mode === 'off') {
-                    continue;
-                }
-                $fields = is_array($config['fields'] ?? null) ? $config['fields'] : [];
-                $mappings = [];
-                if ($mode === 'custom_fields') {
-                    foreach ($fields as $field) {
-                        if (!is_array($field)) {
-                            continue;
-                        }
-                        $target = trim((string)($field['target'] ?? ''));
-                        if (!in_array($target, ['properties', 'tags'], true)) {
-                            continue;
-                        }
-                        $mappings[] = [
-                            'externalFieldId' => trim((string)($field['externalFieldId'] ?? '')),
-                            'sourceLabel' => trim((string)($field['sourceLabel'] ?? '')),
-                            'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
-                            'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
-                            'target' => $target,
-                            'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
-                        ];
-                    }
-                }
-                $known = $formieForms[(string)$formId] ?? null;
-                $externalId = trim((string)($config['externalFormId'] ?? $formId));
-                $configFormName = trim((string)($config['formName'] ?? ''));
-                $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Formie ' . $formId));
-                $formHandle = trim((string)($known['handle'] ?? ''));
-                $contracts[] = [
-                    'provider' => 'formie',
-                    'externalFormId' => str_starts_with($externalId, $formiePrefixLower) ? $externalId : ($formiePrefixLower . $externalId),
-                    'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
-                    'formName' => $formName,
-                    'enabled' => true,
-                    'countOnly' => $mode !== 'custom_fields',
-                    'mode' => $mode,
-                    'fieldMappings' => $mappings,
-                    'icon' => null,
-                ];
+        foreach ($formieFormsConfig as $formId => $config) {
+            if (!is_array($config)) {
+                continue;
             }
-        } else {
-            $formieMode = trim((string)($formieConfig['mode'] ?? 'count_only'));
-            $formieIds = array_values(array_filter(array_map('strval', (array)($formieConfig['formIds'] ?? []))));
-            if (in_array($formieMode, ['count_only', 'custom_fields'], true)) {
-                foreach ($formieIds as $formId) {
-                    $known = $formieForms[$formId] ?? null;
-                    $formName = trim((string)($known['name'] ?? ('Formie ' . $formId)));
-                    $formHandle = trim((string)($known['handle'] ?? ''));
-                    $contracts[] = [
-                        'provider' => 'formie',
-                        'externalFormId' => str_starts_with($formId, $formiePrefixLower) ? $formId : ($formiePrefixLower . $formId),
-                        'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
-                        'formName' => $formName,
-                        'enabled' => true,
-                        'countOnly' => $formieMode !== 'custom_fields',
-                        'mode' => $formieMode,
-                        'fieldMappings' => [],
-                        'icon' => null,
+            $mode = trim((string)($config['mode'] ?? 'off'));
+            if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true) || $mode === 'off') {
+                continue;
+            }
+            $fields = is_array($config['fields'] ?? null) ? $config['fields'] : [];
+            $mappings = [];
+            if ($mode === 'custom_fields') {
+                foreach ($fields as $field) {
+                    if (!is_array($field)) {
+                        continue;
+                    }
+                    $target = trim((string)($field['target'] ?? ''));
+                    if (!in_array($target, ['properties', 'tags'], true)) {
+                        continue;
+                    }
+                    $mappings[] = [
+                        'externalFieldId' => trim((string)($field['externalFieldId'] ?? '')),
+                        'sourceLabel' => trim((string)($field['sourceLabel'] ?? '')),
+                        'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
+                        'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
+                        'target' => $target,
+                        'reportable' => $target === 'tags',
+                        'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
                     ];
                 }
             }
+            $mappings[] = [
+                'externalFieldId' => 'submission_id',
+                'sourceLabel' => 'Submission ID',
+                'dataType' => 'string',
+                'canonicalKey' => 'submissionId',
+                'target' => 'properties',
+                'reportable' => false,
+                'displayLabelOverride' => '',
+            ];
+            $mappings[] = [
+                'externalFieldId' => 'submitted_at',
+                'sourceLabel' => 'Submitted At',
+                'dataType' => 'string',
+                'canonicalKey' => 'submittedAt',
+                'target' => 'properties',
+                'reportable' => false,
+                'displayLabelOverride' => '',
+            ];
+            $known = $formieForms[(string)$formId] ?? null;
+            $externalId = trim((string)($config['externalFormId'] ?? $formId));
+            $configFormName = trim((string)($config['formName'] ?? ''));
+            $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Formie ' . $formId));
+            $formHandle = trim((string)($known['handle'] ?? ''));
+            $contracts[] = [
+                'provider' => 'formie',
+                'externalFormId' => str_starts_with($externalId, $formiePrefixLower) ? $externalId : ($formiePrefixLower . $externalId),
+                'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
+                'formName' => $formName,
+                'enabled' => true,
+                'countOnly' => $mode !== 'custom_fields',
+                'mode' => $mode,
+                'fieldMappings' => $mappings,
+                'icon' => null,
+            ];
         }
 
         return $contracts;

@@ -4,6 +4,15 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.11] - 2026-04-01
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Freeform front-end submissions** were only observed when `SubmissionsService::EVENT_AFTER_SUBMIT` ran (after a stored DB save). Forms with “Store submissions” disabled never triggered that path. The listener now uses **`Solspace\Freeform\Form\Form::EVENT_AFTER_SUBMIT`**, which runs after every successful `handleSubmission()` completion. Invalid, error, and spam-marked forms are skipped before dispatch.
+- **Freeform form config lookup** now falls back to **`externalFormId`** when resolving the numeric form id, so tracked forms still match if saved settings lose associative keys.
+
 ## [5.3.10] - 2026-03-27
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

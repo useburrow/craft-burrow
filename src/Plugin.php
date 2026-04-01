@@ -378,13 +378,16 @@ class Plugin extends CraftPlugin
 
     private function _registerFormHooks(): void
     {
-        $freeformServiceClass = '\Solspace\Freeform\Services\SubmissionsService';
-        $freeformEventConst = $freeformServiceClass . '::EVENT_AFTER_SUBMIT';
-        if (class_exists($freeformServiceClass) && defined($freeformEventConst)) {
+        // Freeform v5: SubmissionsService::EVENT_AFTER_SUBMIT only runs when "Store Submissions" is on
+        // (see SubmissionsService::storeSubmission). Form::EVENT_AFTER_SUBMIT runs after every successful
+        // handleSubmission() completion, matching https://docs.solspace.com/craft/freeform/v5/developer/events/submission
+        $freeformFormClass = '\Solspace\Freeform\Form\Form';
+        $freeformFormEventConst = $freeformFormClass . '::EVENT_AFTER_SUBMIT';
+        if (class_exists($freeformFormClass) && defined($freeformFormEventConst)) {
             /** @var string $eventName */
-            $eventName = constant($freeformEventConst);
+            $eventName = constant($freeformFormEventConst);
             Event::on(
-                $freeformServiceClass,
+                $freeformFormClass,
                 $eventName,
                 function (\yii\base\Event $event): void {
                     try {

@@ -8,17 +8,29 @@ class FormTrackingService extends Component
 {
     public function handleFreeformSubmissionEvent(Event $event): void
     {
-        $submission = null;
         $eventForm = null;
-        if (method_exists($event, 'getSubmission')) {
-            $submission = $event->getSubmission();
-        } elseif (is_object($event->submission ?? null)) {
-            $submission = $event->submission;
-        }
         if (method_exists($event, 'getForm')) {
             $eventForm = $event->getForm();
         } elseif (is_object($event->form ?? null)) {
             $eventForm = $event->form;
+        }
+        if (is_object($eventForm)) {
+            if (method_exists($eventForm, 'hasErrors') && $eventForm->hasErrors()) {
+                return;
+            }
+            if (method_exists($eventForm, 'isValid') && !$eventForm->isValid()) {
+                return;
+            }
+            if (method_exists($eventForm, 'isMarkedAsSpam') && $eventForm->isMarkedAsSpam()) {
+                return;
+            }
+        }
+
+        $submission = null;
+        if (method_exists($event, 'getSubmission')) {
+            $submission = $event->getSubmission();
+        } elseif (is_object($event->submission ?? null)) {
+            $submission = $event->submission;
         }
         if (!is_object($submission)) {
             return;
@@ -170,7 +182,7 @@ class FormTrackingService extends Component
             if (!is_array($form)) {
                 continue;
             }
-            $formId = (int)($form['id'] ?? $key);
+            $formId = (int)($form['id'] ?? $form['externalFormId'] ?? $key);
             if ($formId <= 0 || (($form['enabled'] ?? true) === false)) {
                 continue;
             }

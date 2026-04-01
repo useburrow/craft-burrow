@@ -4,6 +4,18 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.12] - 2026-04-01
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Freeform realtime dispatch** no longer gates on `Form::isValid()`. Freeform can leave the internal `$valid` flag false after a successful DB save, which caused the handler to return before publishing to Burrow.
+
+### Changed
+
+- **Diagnostics:** when a forms submission envelope cannot be built (missing project or forms source id), the plugin now logs a **warning** with context flags so misconfiguration is easier to spot.
+
 ## [5.3.11] - 2026-04-01
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

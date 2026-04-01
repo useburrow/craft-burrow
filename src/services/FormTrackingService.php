@@ -18,9 +18,8 @@ class FormTrackingService extends Component
             if (method_exists($eventForm, 'hasErrors') && $eventForm->hasErrors()) {
                 return;
             }
-            if (method_exists($eventForm, 'isValid') && !$eventForm->isValid()) {
-                return;
-            }
+            // Do not gate on Form::isValid(): Freeform leaves $valid false unless validate() ran on this
+            // request; AFTER_SUBMIT can still follow a successful storeSubmission with a saved element.
             if (method_exists($eventForm, 'isMarkedAsSpam') && $eventForm->isMarkedAsSpam()) {
                 return;
             }
@@ -97,6 +96,24 @@ class FormTrackingService extends Component
             'properties' => $properties,
         ]);
         if ($eventEnvelope === []) {
+            $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
+            $resolvedFormsSource = trim((string)($sourceIds['forms'] ?? ''));
+            if ($resolvedFormsSource === '') {
+                $resolvedFormsSource = trim((string)($runtimeState['projectSourceId'] ?? ''));
+            }
+            $plugin->getLogs()->log(
+                'warning',
+                'Freeform submission not sent: forms event envelope could not be built (check project link and forms source id).',
+                'freeform',
+                'forms',
+                null,
+                [
+                    'formId' => $formId,
+                    'submissionId' => $submissionId,
+                    'projectIdPresent' => trim((string)($runtimeState['projectId'] ?? '')) !== '',
+                    'formsSourceIdPresent' => $resolvedFormsSource !== '',
+                ]
+            );
             return;
         }
         $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, 'freeform', [

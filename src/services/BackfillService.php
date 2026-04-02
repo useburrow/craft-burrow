@@ -133,7 +133,8 @@ class BackfillService extends Component
                         $event,
                         (string)$sdkResult['error'],
                         (string)($event['channel'] ?? ''),
-                        (string)($event['event'] ?? '')
+                        (string)($event['event'] ?? ''),
+                        false
                     );
                 }
 

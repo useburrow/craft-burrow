@@ -17,7 +17,7 @@ class BurrowApiService extends Component
     public function discover(string $baseUrl, string $apiKey, array $capabilities = []): array
     {
         try {
-            $client = $this->createClient($baseUrl, $apiKey, [], [], false, true);
+            $client = $this->createClient($baseUrl, $apiKey, [], [], false, true, null);
             $request = new \Burrow\Sdk\Contracts\OnboardingDiscoveryRequest(
                 site: $this->buildSitePayload(),
                 capabilities: $capabilities
@@ -48,7 +48,7 @@ class BurrowApiService extends Component
     public function link(string $baseUrl, string $apiKey, array $selection, array $capabilities = [], array $runtimeState = []): array
     {
         try {
-            $client = $this->createClient($baseUrl, $apiKey, $runtimeState['sdkState'] ?? [], $runtimeState['ingestionKey'] ?? [], false, true);
+            $client = $this->createClient($baseUrl, $apiKey, $runtimeState['sdkState'] ?? [], $runtimeState['ingestionKey'] ?? [], false, true, null);
             $request = new \Burrow\Sdk\Contracts\OnboardingLinkRequest(
                 site: $this->buildSitePayload(),
                 selection: $selection,
@@ -164,7 +164,8 @@ class BurrowApiService extends Component
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
                 true,
-                false
+                false,
+                $runtimeState
             );
             $resolver = $this->buildRoutingResolver($runtimeState);
             $event = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildSystemStackSnapshotEvent([
@@ -200,7 +201,8 @@ class BurrowApiService extends Component
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
                 true,
-                false
+                false,
+                $runtimeState
             );
             $resolver = $this->buildRoutingResolver($runtimeState);
             $event = \Burrow\Sdk\Events\CanonicalEnvelopeBuilders::buildSystemHeartbeatEvent([
@@ -232,7 +234,8 @@ class BurrowApiService extends Component
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
                 true,
-                false
+                false,
+                $runtimeState
             );
             $request = new \Burrow\Sdk\Contracts\FormsContractSubmissionRequest($this->buildFormsContractPayload($runtimeState, $formsContracts));
             $response = $client->submitFormsContract($request);
@@ -286,6 +289,7 @@ class BurrowApiService extends Component
                 $runtimeState['ingestionKey'] ?? [],
                 true,
                 false,
+                $runtimeState,
                 120
             );
 
@@ -364,10 +368,12 @@ class BurrowApiService extends Component
                 $runtimeState['sdkState'] ?? [],
                 $runtimeState['ingestionKey'] ?? [],
                 true,
-                false
+                false,
+                $runtimeState
             );
 
             $published = 0;
+            $lastPublishError = '';
             foreach ($events as $event) {
                 if (!is_array($event) || empty($event['event']) || empty($event['channel'])) {
                     continue;
@@ -375,15 +381,15 @@ class BurrowApiService extends Component
                 try {
                     $client->publishEvent($event);
                     $published++;
-                } catch (\Throwable) {
-                    // Best-effort publish: continue with remaining events.
+                } catch (\Throwable $e) {
+                    $lastPublishError = $e->getMessage();
                     continue;
                 }
             }
 
             return [
                 'ok' => $published > 0,
-                'error' => $published > 0 ? '' : 'All event publishes failed.',
+                'error' => $published > 0 ? '' : ($lastPublishError !== '' ? $lastPublishError : 'All event publishes failed.'),
                 'requestedCount' => $requested,
                 'publishedCount' => $published,
                 'failedCount' => max(0, $requested - $published),
@@ -1072,6 +1078,41 @@ class BurrowApiService extends Component
         return $envelope;
     }
 
+    /**
+     * Merge top-level runtime state into SDK-persisted client state before {@see BurrowClientState::fromArray()}.
+     *
+     * Realtime POST /api/v1/events scopes the client with {@see BurrowClient::$scopedProjectId} from sdkState and
+     * asserts it matches each envelope's projectId. Envelopes are built from runtime row fields (projectId,
+     * sourceIds). Backfill uses explicit routing in the request body, so it can succeed while realtime fails if
+     * sdkState lags after link/settings changes. Overlay keeps both paths aligned.
+     *
+     * @param array<string,mixed> $sdkState
+     * @param array<string,mixed> $runtimeState
+     * @return array<string,mixed>
+     */
+    private function overlayRuntimeScopeOnSdkState(array $sdkState, array $runtimeState): array
+    {
+        $merged = $sdkState;
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        if ($projectId !== '') {
+            $merged['projectId'] = $projectId;
+        }
+        $clientId = trim((string)($runtimeState['clientId'] ?? ''));
+        if ($clientId !== '') {
+            $merged['clientId'] = $clientId;
+        }
+        $ingestion = is_array($runtimeState['ingestionKey'] ?? null) ? trim((string)($runtimeState['ingestionKey']['key'] ?? '')) : '';
+        if ($ingestion !== '') {
+            $merged['ingestionKey'] = $ingestion;
+        }
+        $formsSourceId = $this->resolveChannelSourceId($runtimeState, 'forms');
+        if ($formsSourceId !== '') {
+            $merged['formsProjectSourceId'] = $formsSourceId;
+        }
+
+        return $merged;
+    }
+
     private function createClient(
         string $baseUrl,
         string $apiKey,
@@ -1079,6 +1120,7 @@ class BurrowApiService extends Component
         array $ingestionKey = [],
         bool $dispatchClient = false,
         bool $ignoreSdkStateIngestion = false,
+        ?array $runtimeScopeOverlay = null,
         int $httpTimeoutSeconds = 8
     ): \Burrow\Sdk\Client\BurrowClient
     {
@@ -1090,6 +1132,9 @@ class BurrowApiService extends Component
         $state = is_array($sdkState) ? $sdkState : [];
         if ($ignoreSdkStateIngestion) {
             $state['ingestionKey'] = '';
+        }
+        if (is_array($runtimeScopeOverlay) && $runtimeScopeOverlay !== []) {
+            $state = $this->overlayRuntimeScopeOnSdkState($state, $runtimeScopeOverlay);
         }
         $ingestionAuthKey = trim((string)($ingestionKey['key'] ?? ''));
         $primaryApiKey = trim($apiKey);

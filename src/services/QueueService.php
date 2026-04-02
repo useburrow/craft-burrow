@@ -2,12 +2,20 @@
 namespace burrow\Burrow\services;
 
 use burrow\Burrow\elements\OutboxElement;
+use burrow\Burrow\jobs\DeliverOutboxRowJob;
+use burrow\Burrow\Plugin;
 use Craft;
 use craft\base\Component;
+use craft\db\Query;
 use craft\helpers\Db;
+use craft\helpers\Queue as QueueHelper;
 
 class QueueService extends Component
 {
+    /**
+     * Matches WordPress Burrow plugin default: automatic delayed retries after failed realtime delivery.
+     */
+    public const DEFAULT_MAX_ATTEMPTS = 6;
     private bool $deferOutboxElementSearchIndex = false;
 
     /** @var array<int, true> */
@@ -170,6 +178,8 @@ class QueueService extends Component
             '{{%burrow_outbox}}',
             [
                 'status' => 'pending',
+                'attempt_count' => 0,
+                'last_error' => null,
                 'next_attempt_at' => null,
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ],
@@ -177,6 +187,9 @@ class QueueService extends Component
         )->execute();
         if ($ok) {
             $this->syncElementIndexRecordByOutboxId($id);
+            if (Plugin::getInstance()->canDispatchToBurrow()) {
+                QueueHelper::push(new DeliverOutboxRowJob(['outboxId' => $id]), null, 0, 120);
+            }
         }
         return $ok;
     }
@@ -202,7 +215,8 @@ class QueueService extends Component
             $eventName,
             'sent',
             null,
-            gmdate('Y-m-d H:i:s')
+            gmdate('Y-m-d H:i:s'),
+            false
         );
         if (!$ok) {
             return false;
@@ -229,7 +243,7 @@ class QueueService extends Component
     /**
      * @param array<string,mixed> $payload
      */
-    public function markFailed(string $eventKey, array $payload, string $error, string $channel = '', string $eventName = ''): bool
+    public function markFailed(string $eventKey, array $payload, string $error, string $channel = '', string $eventName = '', bool $scheduleAutoRetry = true): bool
     {
         $ok = $this->upsertDeliveryRecord(
             $eventKey,
@@ -238,7 +252,8 @@ class QueueService extends Component
             $eventName,
             'failed',
             $error,
-            null
+            null,
+            $scheduleAutoRetry
         );
         if ($ok) {
             $this->syncElementIndexRecordByEventKey($eventKey);
@@ -320,45 +335,134 @@ class QueueService extends Component
         string $eventName,
         string $status,
         ?string $lastError,
-        ?string $sentAt
+        ?string $sentAt,
+        bool $scheduleAutoRetry = true
     ): bool {
+        $eventKey = trim($eventKey);
+        if ($eventKey === '') {
+            return false;
+        }
+
+        $db = Craft::$app->getDb();
+        $transaction = $db->beginTransaction();
         try {
+            $row = (new Query())
+                ->from('{{%burrow_outbox}}')
+                ->where(['event_key' => $eventKey])
+                ->one($db);
             $now = gmdate('Y-m-d H:i:s');
-            Craft::$app->getDb()->createCommand()->upsert(
-                '{{%burrow_outbox}}',
-                [
-                    'id' => bin2hex(random_bytes(16)),
+            $maxAttempts = self::DEFAULT_MAX_ATTEMPTS;
+
+            if ($row === false || $row === null) {
+                $id = bin2hex(random_bytes(16));
+                $attemptCount = 1;
+                $storedMax = $maxAttempts;
+                if ($status === 'sent') {
+                    $newStatus = 'sent';
+                } else {
+                    $canAuto = $scheduleAutoRetry && Plugin::getInstance()->canDispatchToBurrow();
+                    $newStatus = ($canAuto && $attemptCount < $storedMax) ? 'retrying' : 'failed';
+                }
+                $db->createCommand()->insert('{{%burrow_outbox}}', [
+                    'id' => $id,
                     'event_key' => $eventKey,
                     'channel' => $channel ?: null,
                     'event_name' => $eventName ?: null,
-                    'status' => $status,
-                    'attempt_count' => 1,
-                    'max_attempts' => 1,
+                    'status' => $newStatus,
+                    'attempt_count' => $attemptCount,
+                    'max_attempts' => $storedMax,
                     'payload' => $payload,
                     'last_error' => $lastError,
                     'next_attempt_at' => null,
                     'sent_at' => $sentAt,
                     'created_at' => $now,
                     'updated_at' => $now,
-                ],
-                [
-                    'channel' => $channel ?: null,
-                    'event_name' => $eventName ?: null,
-                    'status' => $status,
-                    'attempt_count' => 1,
-                    'max_attempts' => 1,
-                    'payload' => $payload,
-                    'last_error' => $lastError,
-                    'next_attempt_at' => null,
-                    'sent_at' => $sentAt,
-                    'updated_at' => $now,
-                ]
-            )->execute();
-            $this->syncElementIndexRecordByEventKey($eventKey);
+                ])->execute();
+                $transaction->commit();
+                $this->syncElementIndexRecordByOutboxId($id);
+                if ($status !== 'sent' && $newStatus === 'retrying') {
+                    $this->pushDelayedOutboxDelivery($id, $attemptCount, $scheduleAutoRetry);
+                }
+                return true;
+            }
+
+            $id = trim((string)($row['id'] ?? ''));
+            $prevAttempts = (int)($row['attempt_count'] ?? 0);
+            $attemptCount = $prevAttempts + 1;
+            $storedMax = max((int)($row['max_attempts'] ?? 1), $maxAttempts);
+            $queueDelayedRetryAfterCommit = false;
+
+            if ($status === 'sent') {
+                $newStatus = 'sent';
+                // Do not increment on success: attempt_count reflects tries that occurred before delivery succeeded.
+                $successAttemptCount = max(1, $prevAttempts);
+                $db->createCommand()->update(
+                    '{{%burrow_outbox}}',
+                    [
+                        'channel' => $channel ?: null,
+                        'event_name' => $eventName ?: null,
+                        'status' => $newStatus,
+                        'attempt_count' => $successAttemptCount,
+                        'max_attempts' => $storedMax,
+                        'payload' => $payload,
+                        'last_error' => null,
+                        'next_attempt_at' => null,
+                        'sent_at' => $sentAt,
+                        'updated_at' => $now,
+                    ],
+                    ['id' => $id]
+                )->execute();
+            } else {
+                $canAuto = $scheduleAutoRetry && Plugin::getInstance()->canDispatchToBurrow();
+                if (!$scheduleAutoRetry) {
+                    $newStatus = 'failed';
+                } elseif ($attemptCount >= $storedMax) {
+                    $newStatus = 'failed';
+                } else {
+                    $newStatus = $canAuto ? 'retrying' : 'failed';
+                }
+                $db->createCommand()->update(
+                    '{{%burrow_outbox}}',
+                    [
+                        'channel' => $channel ?: null,
+                        'event_name' => $eventName ?: null,
+                        'status' => $newStatus,
+                        'attempt_count' => $attemptCount,
+                        'max_attempts' => $storedMax,
+                        'payload' => $payload,
+                        'last_error' => $lastError,
+                        'next_attempt_at' => null,
+                        'sent_at' => null,
+                        'updated_at' => $now,
+                    ],
+                    ['id' => $id]
+                )->execute();
+                if ($newStatus === 'retrying') {
+                    $queueDelayedRetryAfterCommit = true;
+                }
+            }
+
+            $transaction->commit();
+            if ($id !== '') {
+                $this->syncElementIndexRecordByOutboxId($id);
+            }
+            if ($queueDelayedRetryAfterCommit && $id !== '') {
+                $this->pushDelayedOutboxDelivery($id, $attemptCount, $scheduleAutoRetry);
+            }
             return true;
         } catch (\Throwable) {
+            $transaction->rollBack();
             return false;
         }
+    }
+
+    private function pushDelayedOutboxDelivery(string $outboxId, int $attemptCountAfterFailure, bool $scheduleAutoRetry): void
+    {
+        if (!$scheduleAutoRetry || !Plugin::getInstance()->canDispatchToBurrow()) {
+            return;
+        }
+        $delay = min(600, 30 * max(1, $attemptCountAfterFailure));
+        QueueHelper::push(new DeliverOutboxRowJob(['outboxId' => $outboxId]), null, $delay, 120);
     }
 
     private function syncElementIndexRecordByEventKey(string $eventKey): void

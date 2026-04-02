@@ -4,6 +4,24 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.13] - 2026-04-01
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Added
+
+- **`DeliverOutboxRowJob`** queues delayed republish of a single outbox row for automatic retries and manual retry.
+- **Outbox slide-out (element editor):** “Delivery” section explains the retry cap and adds **Retry now** when Burrow is dispatchable, plus optional return to the same editor after POST.
+
+### Changed
+
+- **Outbox delivery** now uses up to **six** attempts by default (aligned with the WordPress plugin). Failed realtime sends move to **`retrying`**, schedule backoff jobs, and **`markSent`** no longer inflates the attempt counter on success.
+- **`retryNow()`** resets attempts, clears the last error, and **pushes the delivery job** so retries actually run (previously only flipped status to `pending`).
+- **Backfill** batch failures call `markFailed` with **no automatic outbox retry queue**, avoiding a storm of per-event jobs.
+- **`SettingsController::actionRetryOutbox`** accepts **`return`** = `burrow/outbox/{id}` for redirects from the slide-out.
+- **`BurrowApiService::createClient`** accepts optional **runtime scope overlay** so SDK client state matches DB runtime (`projectId`, ingestion key, forms source id). This keeps realtime `/api/v1/events` routing consistent with backfill when persisted SDK state lags.
+- **`publishEvents`** surfaces the **last exception message** when all publishes fail instead of a generic message only.
+
 ## [5.3.12] - 2026-04-01
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

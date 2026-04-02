@@ -286,6 +286,11 @@ class SettingsController extends Controller
         $ok = Plugin::getInstance()->getQueue()->retryNow($id);
         Craft::$app->getSession()->setNotice($ok ? Craft::t('burrow', 'Outbox record queued for retry.') : Craft::t('burrow', 'Unable to retry outbox record.'));
 
+        $return = trim((string)Craft::$app->getRequest()->getBodyParam('return', ''));
+        if ($return !== '' && preg_match('#^burrow/outbox/\d+$#', $return)) {
+            return $this->redirect($return);
+        }
+
         return $this->redirect('burrow/outbox?' . http_build_query($query));
     }
 

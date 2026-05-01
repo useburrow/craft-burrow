@@ -79,27 +79,29 @@ class OutboxElement extends Element
             [
                 'key' => '*',
                 'label' => 'All',
-                'criteria' => ['status' => null],
+                // Explicitly clear Craft's built-in element status filter.
+                // Outbox uses `outboxStatus` (pending/retrying/failed/sent), and "All" must include all of them.
+                'criteria' => ['status' => null, 'outboxStatus' => null],
             ],
             [
                 'key' => 'pending',
                 'label' => 'Pending',
-                'criteria' => ['status' => 'pending'],
+                'criteria' => ['status' => null, 'outboxStatus' => 'pending'],
             ],
             [
                 'key' => 'retrying',
                 'label' => 'Retrying',
-                'criteria' => ['status' => 'retrying'],
+                'criteria' => ['status' => null, 'outboxStatus' => 'retrying'],
             ],
             [
                 'key' => 'failed',
                 'label' => 'Failed',
-                'criteria' => ['status' => 'failed'],
+                'criteria' => ['status' => null, 'outboxStatus' => 'failed'],
             ],
             [
                 'key' => 'sent',
                 'label' => 'Sent',
-                'criteria' => ['status' => 'sent'],
+                'criteria' => ['status' => null, 'outboxStatus' => 'sent'],
             ],
         ];
     }

@@ -4,6 +4,25 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.14] - 2026-05-01
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Changed
+
+- **Setup UX refresh:** modernized onboarding visuals for **Project**, **Integrations**, **Craft Commerce setup**, and **Review** steps with improved spacing, status chips/cards, richer guidance, and plugin icon usage.
+- **Project step selection UX:** clicking anywhere on a project row now selects its radio option, and the current project (or first row) is auto-selected by default.
+- **Dashboard snapshot refresh flow:** `Refresh Snapshot` now supports `returnTo=dashboard` so dashboard refresh no longer redirects users to Setup Review.
+
+### Fixed
+
+- **Freeform realtime submissions:** forms events now include required routing metadata (`organizationId`, `clientId`) in `buildFormsSubmissionEvent()`, fixing Burrow API rejections like `Missing required field: organizationId`.
+- **Dispatch auth fallback:** dispatch clients now correctly fall back to the account API key when ingestion key is empty, avoiding empty-auth 401s on backfill/dispatch paths.
+- **Outbox source filtering:** element index source criteria and query status handling now treat Outbox statuses (`pending`, `retrying`, `failed`, `sent`) as first-class; **All** no longer collapses to only enabled/sent rows.
+- **Outbox default ordering:** Outbox element query now defaults to newest-first (`outboxCreatedAt DESC`) for consistent recency ordering.
+- **Outbox implicit sort override:** when Craft applies an implicit default `id ASC` sort, the query now overrides it to newest-first (`outboxCreatedAt DESC`, `elements.id DESC`) so default list order is never oldest-first.
+- **Outbox sort guard:** fixed a type-casting crash when Craft supplies `OrderByPlaceholderExpression` values in `orderBy`; default-sort detection now ignores non-scalar direction values safely.
+
 ## [5.3.13] - 2026-04-01
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

@@ -414,14 +414,18 @@ class BurrowApiService extends Component
      */
     public function buildFormsSubmissionEvent(array $runtimeState, array $payload): array
     {
+        $organizationId = trim((string)($runtimeState['organizationId'] ?? ''));
+        $clientId = $this->resolveClientId($runtimeState);
         $projectId = trim((string)($runtimeState['projectId'] ?? ''));
         $projectSourceId = $this->resolveChannelSourceId($runtimeState, 'forms');
         $timestamp = trim((string)($payload['timestamp'] ?? $payload['submittedAt'] ?? ''));
-        if ($projectId === '' || $projectSourceId === '' || $timestamp === '') {
+        if ($organizationId === '' || $clientId === '' || $projectId === '' || $projectSourceId === '' || $timestamp === '') {
             return [];
         }
 
         return [
+            'organizationId' => $organizationId,
+            'clientId' => $clientId,
             'projectId' => $projectId,
             'projectSourceId' => $projectSourceId,
             'channel' => 'forms',

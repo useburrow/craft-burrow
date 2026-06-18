@@ -4,6 +4,14 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.15] - 2026-06-18
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Freeform setup field discovery:** the setup wizard now reads fields from the Freeform v5 form layout instead of the removed `fields->getFields()` API, so form field mapping lists populate correctly during onboarding.
+
 ## [5.3.14] - 2026-05-01
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

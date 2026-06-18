@@ -139,38 +139,53 @@ class IntegrationsService extends Component
             return $fields;
         }
 
-        if (class_exists('\Solspace\Freeform\Freeform')) {
-            try {
-                $form = \Solspace\Freeform\Freeform::getInstance()->forms->getFormById((int)$formId);
-                if ($form !== null) {
-                    $freeformFields = \Solspace\Freeform\Freeform::getInstance()->fields->getFields($form);
-                    foreach ($freeformFields as $freeformField) {
-                        if (!$freeformField instanceof \Solspace\Freeform\Fields\FieldInterface) {
-                            continue;
-                        }
-                        $fieldId = trim((string)($freeformField->getId() ?? ''));
-                        if ($fieldId === '') {
-                            continue;
-                        }
-                        $sourceLabel = trim((string)($freeformField->getLabel() ?? $freeformField->getHandle() ?? ''));
-                        $sourceLabel = $sourceLabel !== '' ? $sourceLabel : ('Field ' . $fieldId);
-                        $fieldType = trim((string)($freeformField->getType() ?? 'string'));
-                        $fields[] = [
-                            'externalFieldId' => $fieldId,
-                            'sourceLabel' => $sourceLabel,
-                            'dataType' => $fieldType !== '' ? $fieldType : 'string',
-                            'canonicalKey' => $this->labelToCanonicalKey($sourceLabel),
-                        ];
-                    }
-
-                    return $fields;
-                }
-            } catch (\Throwable) {
-                return [];
-            }
+        if (!class_exists('\Solspace\Freeform\Freeform')) {
+            return $fields;
         }
 
-        return [];
+        try {
+            $formModel = \Solspace\Freeform\Freeform::getInstance()->forms->getFormById((int)$formId);
+            if ($formModel === null) {
+                return $fields;
+            }
+
+            $layout = method_exists($formModel, 'getLayout')
+                ? $formModel->getLayout()
+                : (method_exists($formModel, 'getForm') ? $formModel->getForm()->getLayout() : null);
+            if ($layout === null || !method_exists($layout, 'getFields')) {
+                return $fields;
+            }
+
+            foreach ($layout->getFields() as $freeformField) {
+                if (!is_object($freeformField)) {
+                    continue;
+                }
+                if (method_exists($freeformField, 'canStoreValues') && !$freeformField->canStoreValues()) {
+                    continue;
+                }
+
+                $handle = trim((string)($freeformField->getHandle() ?? ''));
+                if ($handle === '') {
+                    continue;
+                }
+
+                $sourceLabel = trim((string)($freeformField->getLabel() ?? $handle));
+                $sourceLabel = $sourceLabel !== '' ? $sourceLabel : $handle;
+                $fieldType = method_exists($freeformField, 'getType')
+                    ? trim((string)($freeformField->getType() ?? 'string'))
+                    : 'string';
+                $fields[] = [
+                    'externalFieldId' => $handle,
+                    'sourceLabel' => $sourceLabel,
+                    'dataType' => $fieldType !== '' ? $fieldType : 'string',
+                    'canonicalKey' => $this->labelToCanonicalKey($sourceLabel),
+                ];
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return $fields;
     }
 
     /**

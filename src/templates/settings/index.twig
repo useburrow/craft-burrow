@@ -60,17 +60,11 @@
         .burrow-setup-icon { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; margin-bottom: 4px; }
         .burrow-setup-icon .burrow-icon-dot { width: 16px; height: 16px; border-radius: 50%; background: #0d66d0; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
         .burrow-setup-icon .burrow-menu-glyph { width: 16px; height: 16px; object-fit: contain; }
-        .burrow-project-table { margin-top: 10px; border: 1px solid #e3e5e8; border-radius: 6px; overflow: hidden; }
-        .burrow-project-table thead th { background: #f7f8fa; font-weight: 700; padding: 10px 12px; }
-        .burrow-project-table tbody td { padding: 11px 12px; vertical-align: middle; }
-        .burrow-project-table tbody tr:nth-child(odd) td { background: #fff; }
-        .burrow-project-table tbody tr:nth-child(even) td { background: #f9fafb; }
-        .burrow-project-table tbody tr:hover td { background: #f2f7fd; }
-        .burrow-project-table tbody tr { cursor: pointer; }
-        .burrow-project-table td:first-child { width: 44px; text-align: center; }
-        .burrow-project-table input[type="radio"] { width: 16px; height: 16px; accent-color: #0d66d0; }
-        .burrow-project-name { font-weight: 600; }
-        .burrow-project-id { display: block; margin-top: 2px; font-size: 11px; color: #667085; }
+        .burrow-project-select { max-width: 520px; margin-top: 10px; }
+        .burrow-project-select .custom-select { width: 100%; }
+        .burrow-project-select .menubtn { width: 100%; justify-content: space-between; }
+        .burrow-project-detail { margin-top: 8px; font-size: 12px; color: #667085; }
+        .burrow-project-detail code { font-size: 11px; }
         .burrow-integration-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
         .burrow-integration-card { border: 1px solid #d9dde3; border-radius: 8px; background: #fff; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
         .burrow-integration-card:hover { border-color: #b8c2cf; box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08); }
@@ -156,66 +150,80 @@
                 <p>No discovered projects yet. Run Step 1 first.</p>
             {% else %}
                 {% set selectedProjectId = state.projectId ?? '' %}
-                {% set hasSelectedProject = false %}
+                {% set selectedProjectValue = '' %}
+                {% set projectOptions = [] %}
                 {% for project in projects %}
-                    {% if (project.projectId ?? '') == selectedProjectId %}
-                        {% set hasSelectedProject = true %}
+                    {% set projectId = project.projectId ?? '' %}
+                    {% set projectValue = project|json_encode %}
+                    {% set projectLabel = (project.projectName ?: project.projectId) ~ ' — ' ~ (project.clientName ?: project.clientId) %}
+                    {% set projectOptions = projectOptions|merge([{
+                        labelHtml: '<span class="label">' ~ projectLabel|e ~ '</span>',
+                        value: projectValue,
+                    }]) %}
+                    {% if projectId == selectedProjectId %}
+                        {% set selectedProjectValue = projectValue %}
                     {% endif %}
                 {% endfor %}
                 <form method="post" action="{{ actionUrl('burrow/settings/select-project') }}">
                     {{ csrfInput() }}
-                    <table class="data fullwidth burrow-project-table">
-                        <thead>
-                            <tr>
-                                <th></th>
-                                <th>Project</th>
-                                <th>Client</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for project in projects %}
-                                {% set projectId = project.projectId ?? '' %}
-                                {% set isChecked = projectId == selectedProjectId or (not hasSelectedProject and loop.first) %}
-                                <tr class="burrow-project-row">
-                                    <td><input type="radio" name="projectSelection" value="{{ project|json_encode|e('html_attr') }}" {{ isChecked ? 'checked' : '' }} required></td>
-                                    <td>
-                                        <span class="burrow-project-name">{{ project.projectName ?: project.projectId }}</span>
-                                        <span class="burrow-project-id">{{ project.projectId }}</span>
-                                    </td>
-                                    <td>{{ project.clientName ?: project.clientId }}</td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                    <div class="burrow-project-select">
+                        {{ forms.customSelectField({
+                            label: 'Project'|t('burrow'),
+                            id: 'burrowProjectSelection',
+                            name: 'projectSelection',
+                            options: projectOptions,
+                            value: selectedProjectValue,
+                            defaultButtonLabel: 'Select a project…'|t('burrow'),
+                        }) }}
+                    </div>
+                    <p class="burrow-project-detail" hidden></p>
                     <div style="margin-top: 15px;">
                         <button class="btn submit">Link Project</button>
                     </div>
                 </form>
-                <script>
+                {% js %}
                     (() => {
-                        const rows = Array.from(document.querySelectorAll('.burrow-project-row'));
-                        if (!rows.length) {
+                        const $container = $('#{{ 'burrowProjectSelection'|namespaceInputId }}');
+                        const $input = $('#{{ 'burrowProjectSelection-input'|namespaceInputId }}');
+                        const $detail = $container.closest('form').find('.burrow-project-detail');
+                        if (!$container.length || !$input.length || !$detail.length) {
                             return;
                         }
-                        rows.forEach((row) => {
-                            row.addEventListener('click', (event) => {
-                                const target = event.target;
-                                if (!(target instanceof HTMLElement)) {
-                                    return;
-                                }
-                                if (target.closest('input[type="radio"]')) {
-                                    return;
-                                }
-                                const radio = row.querySelector('input[type="radio"][name="projectSelection"]');
-                                if (!radio) {
-                                    return;
-                                }
-                                radio.checked = true;
-                                radio.dispatchEvent(new Event('change', { bubbles: true }));
-                            });
+                        const syncDetail = () => {
+                            const value = $input.val();
+                            if (!value) {
+                                $detail.prop('hidden', true).text('');
+                                return;
+                            }
+                            let parsed;
+                            try {
+                                parsed = JSON.parse(value);
+                            } catch (error) {
+                                $detail.prop('hidden', true).text('');
+                                return;
+                            }
+                            const projectId = parsed.projectId || '';
+                            const clientName = parsed.clientName || parsed.clientId || '';
+                            if (!projectId) {
+                                $detail.prop('hidden', true).text('');
+                                return;
+                            }
+                            $detail.prop('hidden', false).html(
+                                'Client: <strong>' + clientName + '</strong> · Project ID: <code>' + projectId + '</code>'
+                            );
+                        };
+                        $container.on('change', syncDetail);
+                        syncDetail();
+                        $container.closest('form').on('submit', (event) => {
+                            if ($input.val()) {
+                                return;
+                            }
+                            event.preventDefault();
+                            Craft.cp.displayError('{{ 'Please choose a project.'|t('burrow')|e('js') }}');
+                            $container.find('.menubtn').trigger('focus');
                         });
                     })();
-                </script>
+                {% endjs %}
             {% endif %}
 
         {% elseif step == 'integrations' %}

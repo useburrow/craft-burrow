@@ -271,7 +271,17 @@ class BurrowApiService extends Component
 
     /**
      * @param array<int,array<string,mixed>> $events
-     * @return array{ok:bool,error:string,requestedCount:int,acceptedCount:int,rejectedCount:int,validationRejectedCount:int,latestCursor:string}
+     * @return array{
+     *   ok:bool,
+     *   error:string,
+     *   requestedCount:int,
+     *   acceptedCount:int,
+     *   rejectedCount:int,
+     *   validationRejectedCount:int,
+     *   latestCursor:string,
+     *   accepted:list<array<string,mixed>>,
+     *   rejected:list<array<string,mixed>>
+     * }
      */
     public function submitBackfillEvents(
         string $baseUrl,
@@ -293,6 +303,7 @@ class BurrowApiService extends Component
                 120
             );
 
+            $channel = $this->inferBackfillRequestChannel($events);
             $request = new \Burrow\Sdk\Contracts\BackfillEventsRequest(
                 events: array_values($events),
                 backfill: new \Burrow\Sdk\Contracts\BackfillWindow(
@@ -301,13 +312,11 @@ class BurrowApiService extends Component
                     windowEnd: $windowEnd,
                     source: 'craft-plugin'
                 ),
-                channel: null,
+                channel: $channel,
                 source: 'craft-plugin',
-                routing: [
-                    'projectId' => trim((string)($runtimeState['projectId'] ?? '')),
-                    'projectSourceId' => trim((string)($runtimeState['projectSourceId'] ?? '')),
-                    'clientId' => trim((string)($runtimeState['clientId'] ?? '')),
-                ]
+                routing: $channel === 'forms'
+                    ? []
+                    : $this->buildBackfillRequestRouting($runtimeState, $channel)
             );
             $result = $client->backfillEvents(
                 $request,
@@ -318,14 +327,19 @@ class BurrowApiService extends Component
                 )
             );
 
+            $acceptedCount = (int)$result->acceptedCount;
+            $rejectedCount = (int)$result->rejectedCount;
+
             return [
                 'ok' => true,
                 'error' => '',
                 'requestedCount' => (int)$result->requestedCount,
-                'acceptedCount' => (int)$result->acceptedCount,
-                'rejectedCount' => (int)$result->rejectedCount,
+                'acceptedCount' => $acceptedCount,
+                'rejectedCount' => $rejectedCount,
                 'validationRejectedCount' => (int)$result->validationRejectedCount,
                 'latestCursor' => trim((string)($result->latestCursor ?? '')),
+                'accepted' => array_values(array_filter($result->accepted, static fn (mixed $row): bool => is_array($row))),
+                'rejected' => array_values(array_filter($result->rejected, static fn (mixed $row): bool => is_array($row))),
             ];
         } catch (\Throwable $e) {
             return [
@@ -336,6 +350,8 @@ class BurrowApiService extends Component
                 'rejectedCount' => 0,
                 'validationRejectedCount' => 0,
                 'latestCursor' => '',
+                'accepted' => [],
+                'rejected' => [],
             ];
         }
     }
@@ -423,7 +439,9 @@ class BurrowApiService extends Component
             return [];
         }
 
-        return [
+        $tags = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+        $properties = is_array($payload['properties'] ?? null) ? $payload['properties'] : [];
+        $envelope = [
             'organizationId' => $organizationId,
             'clientId' => $clientId,
             'projectId' => $projectId,
@@ -432,9 +450,16 @@ class BurrowApiService extends Component
             'event' => 'forms.submission.received',
             'timestamp' => $timestamp,
             'source' => trim((string)($payload['source'] ?? 'craft-plugin')),
-            'tags' => is_array($payload['tags'] ?? null) ? $payload['tags'] : [],
-            'properties' => is_array($payload['properties'] ?? null) ? $payload['properties'] : [],
+            'tags' => $tags,
+            'properties' => $properties,
         ];
+        $submissionId = trim((string)($properties['submissionId'] ?? ''));
+        $formIdTag = trim((string)($tags['formId'] ?? ''));
+        if ($submissionId !== '' && $formIdTag !== '') {
+            $envelope['externalEventId'] = $formIdTag . '_sub_' . $submissionId;
+        }
+
+        return $envelope;
     }
 
     /**
@@ -1202,6 +1227,47 @@ class BurrowApiService extends Component
             }
         }
         return trim((string)($runtimeState['projectSourceId'] ?? ''));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $events
+     */
+    private function inferBackfillRequestChannel(array $events): ?string
+    {
+        $channels = [];
+        foreach ($events as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+            $channel = strtolower(trim((string)($event['channel'] ?? '')));
+            if ($channel !== '') {
+                $channels[$channel] = true;
+            }
+        }
+
+        return count($channels) === 1 && isset($channels['forms']) ? 'forms' : null;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function buildBackfillRequestRouting(array $runtimeState, ?string $channel): array
+    {
+        $routingChannel = $channel ?? 'ecommerce';
+        if ($routingChannel === 'forms') {
+            $routingChannel = 'ecommerce';
+        }
+
+        $routing = [
+            'projectId' => trim((string)($runtimeState['projectId'] ?? '')),
+            'projectSourceId' => $this->resolveChannelSourceId($runtimeState, $routingChannel),
+            'clientId' => $this->resolveClientId($runtimeState),
+        ];
+
+        return array_filter(
+            $routing,
+            static fn (string $value): bool => trim($value) !== ''
+        );
     }
 
     /**

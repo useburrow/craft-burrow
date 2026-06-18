@@ -140,16 +140,8 @@ class BackfillService extends Component
 
                 return false;
             }
-            foreach ($events as $index => $event) {
-                if (!is_array($event)) {
-                    continue;
-                }
-                $plugin->getQueue()->markSent(
-                    (string)($keys[$index] ?? $this->buildBackfillEventKey($event)),
-                    $event,
-                    (string)($event['channel'] ?? ''),
-                    (string)($event['event'] ?? '')
-                );
+            if (!$this->applyBackfillDeliveryResults($plugin, $keys, $events, $sdkResult)) {
+                return false;
             }
             $checkpoint['requested'] = (int)($checkpoint['requested'] ?? 0) + (int)($sdkResult['requestedCount'] ?? count($events));
             $checkpoint['accepted'] = (int)($checkpoint['accepted'] ?? 0) + (int)($sdkResult['acceptedCount'] ?? 0);
@@ -371,15 +363,20 @@ class BackfillService extends Component
             ];
         }
 
+        $rejected = (int)($checkpoint['rejected'] ?? 0);
+        $completedOk = $accepted > 0 || ($requested === 0 && $rejected === 0);
+
         return [
-            'ok' => true,
-            'error' => '',
+            'ok' => $completedOk,
+            'error' => $completedOk
+                ? ''
+                : sprintf('%d backfill event(s) were rejected by Burrow with 0 accepted. Check failed outbox rows for reasons.', $rejected),
             'windowStart' => $windowStart,
             'windowEnd' => $windowEnd,
             'sources' => $sources,
             'requested' => $requested,
             'accepted' => $accepted + $skippedDuplicates,
-            'rejected' => (int)($checkpoint['rejected'] ?? 0),
+            'rejected' => $rejected,
             'validationRejected' => (int)($checkpoint['validationRejected'] ?? 0),
             'latestCursor' => (string)($checkpoint['latestCursor'] ?? ''),
             'breakdown' => $breakdown,
@@ -1247,6 +1244,204 @@ class BackfillService extends Component
         } catch (\Throwable) {
             return '';
         }
+    }
+
+    /**
+     * @param array<int,string> $keys
+     * @param array<int,array<string,mixed>> $events
+     * @param array<string,mixed> $sdkResult
+     */
+    private function applyBackfillDeliveryResults(
+        \burrow\Burrow\Plugin $plugin,
+        array $keys,
+        array $events,
+        array $sdkResult
+    ): bool {
+        $acceptedCount = (int)($sdkResult['acceptedCount'] ?? 0);
+        $rejectedCount = (int)($sdkResult['rejectedCount'] ?? 0);
+        /** @var list<array<string,mixed>> $acceptedRows */
+        $acceptedRows = is_array($sdkResult['accepted'] ?? null)
+            ? array_values(array_filter($sdkResult['accepted'], static fn (mixed $row): bool => is_array($row)))
+            : [];
+        /** @var list<array<string,mixed>> $rejectedRows */
+        $rejectedRows = is_array($sdkResult['rejected'] ?? null)
+            ? array_values(array_filter($sdkResult['rejected'], static fn (mixed $row): bool => is_array($row)))
+            : [];
+
+        $rejectedIndexes = $this->resolveBackfillOutcomeIndexes($events, $rejectedRows);
+        $acceptedIndexes = $this->resolveBackfillOutcomeIndexes($events, $acceptedRows);
+        $eventCount = count($events);
+
+        if ($eventCount > 0 && $rejectedIndexes === [] && $acceptedIndexes === [] && ($acceptedCount > 0 || $rejectedCount > 0)) {
+            if ($rejectedCount === 0 && $acceptedCount >= $eventCount) {
+                $acceptedIndexes = range(0, $eventCount - 1);
+            } elseif ($acceptedCount === 0 && $rejectedCount >= $eventCount) {
+                $rejectedIndexes = range(0, $eventCount - 1);
+            }
+        }
+
+        $defaultRejectReason = $this->summarizeBackfillRejections($rejectedRows, $sdkResult);
+
+        foreach ($events as $index => $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+            $eventKey = (string)($keys[$index] ?? $this->buildBackfillEventKey($event));
+            $channel = (string)($event['channel'] ?? '');
+            $eventName = (string)($event['event'] ?? '');
+
+            if (in_array($index, $rejectedIndexes, true)) {
+                $plugin->getQueue()->markFailed(
+                    $eventKey,
+                    $event,
+                    $this->extractBackfillRejectionReasonForIndex($index, $events, $rejectedRows, $defaultRejectReason),
+                    $channel,
+                    $eventName,
+                    false
+                );
+                continue;
+            }
+
+            if ($acceptedCount === 0 && $rejectedCount > 0) {
+                $plugin->getQueue()->markFailed(
+                    $eventKey,
+                    $event,
+                    $defaultRejectReason,
+                    $channel,
+                    $eventName,
+                    false
+                );
+                continue;
+            }
+
+            if ($rejectedCount > 0) {
+                if ($acceptedIndexes !== []) {
+                    if (!in_array($index, $acceptedIndexes, true)) {
+                        $plugin->getQueue()->markFailed(
+                            $eventKey,
+                            $event,
+                            'Burrow did not accept this event in a partial backfill response.',
+                            $channel,
+                            $eventName,
+                            false
+                        );
+                        continue;
+                    }
+                } elseif ($rejectedIndexes === []) {
+                    $plugin->getQueue()->markFailed(
+                        $eventKey,
+                        $event,
+                        'Ambiguous partial backfill response from Burrow.',
+                        $channel,
+                        $eventName,
+                        false
+                    );
+                    continue;
+                }
+            }
+
+            $plugin->getQueue()->markSent($eventKey, $event, $channel, $eventName);
+        }
+
+        return !($acceptedCount === 0 && $rejectedCount > 0);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $events
+     * @param list<array<string,mixed>> $outcomeRows
+     * @return list<int>
+     */
+    private function resolveBackfillOutcomeIndexes(array $events, array $outcomeRows): array
+    {
+        $indexes = [];
+        foreach ($outcomeRows as $row) {
+            if (isset($row['index']) && is_numeric($row['index'])) {
+                $indexes[] = (int)$row['index'];
+                continue;
+            }
+            $matched = $this->matchBackfillEventIndexByOutcomeRow($events, $row);
+            if ($matched !== null) {
+                $indexes[] = $matched;
+            }
+        }
+
+        return array_values(array_unique($indexes));
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $events
+     * @param array<string,mixed> $row
+     */
+    private function matchBackfillEventIndexByOutcomeRow(array $events, array $row): ?int
+    {
+        $externalEventId = trim((string)($row['externalEventId'] ?? ''));
+        if ($externalEventId !== '') {
+            foreach ($events as $index => $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+                if (trim((string)($event['externalEventId'] ?? '')) === $externalEventId) {
+                    return $index;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $events
+     * @param list<array<string,mixed>> $rejectedRows
+     */
+    private function extractBackfillRejectionReasonForIndex(int $index, array $events, array $rejectedRows, string $fallback): string
+    {
+        foreach ($rejectedRows as $row) {
+            if ((int)($row['index'] ?? -1) === $index) {
+                return $this->formatBackfillRejectionReason($row);
+            }
+            if ($this->matchBackfillEventIndexByOutcomeRow($events, $row) === $index) {
+                return $this->formatBackfillRejectionReason($row);
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function formatBackfillRejectionReason(array $row): string
+    {
+        $reason = trim((string)($row['reason'] ?? ''));
+        $message = trim((string)($row['message'] ?? ''));
+        if ($reason !== '' && $message !== '') {
+            return $reason . ': ' . $message;
+        }
+        if ($reason !== '') {
+            return $reason;
+        }
+        if ($message !== '') {
+            return $message;
+        }
+
+        return 'Burrow rejected the backfill event.';
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rejectedRows
+     * @param array<string,mixed> $sdkResult
+     */
+    private function summarizeBackfillRejections(array $rejectedRows, array $sdkResult): string
+    {
+        if ($rejectedRows !== []) {
+            return $this->formatBackfillRejectionReason($rejectedRows[0]);
+        }
+        $validationRejectedCount = (int)($sdkResult['validationRejectedCount'] ?? 0);
+        if ($validationRejectedCount > 0) {
+            return 'Burrow SDK rejected ' . $validationRejectedCount . ' event(s) before submit (validation).';
+        }
+
+        return 'Burrow rejected the backfill event batch.';
     }
 
     /**

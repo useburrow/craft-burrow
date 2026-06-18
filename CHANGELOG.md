@@ -4,6 +4,20 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.16] - 2026-06-18
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Changed
+
+- **Project setup step:** replaced the project radio list with a Craft CP custom select combobox, including type-ahead search for long project lists while keeping **Link Project** in view.
+
+### Fixed
+
+- **Backfill 207 handling:** backfill no longer marks every outbox row **Sent** when Burrow returns HTTP 207 with rejected events. Accepted and rejected rows are applied individually, rejection reasons are stored on failed outbox rows, fully rejected batches stop the run, and completed backfill reports failure when zero events were accepted.
+- **Forms backfill routing:** forms backfill requests now use the SDK forms channel routing (`projectSourceId` from forms source state) instead of the generic project source id.
+- **Forms backfill dedupe:** forms submission envelopes now include a stable `externalEventId` (`{formIdTag}_sub_{submissionId}`) so partial 207 responses can be matched reliably.
+
 ## [5.3.15] - 2026-06-18
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

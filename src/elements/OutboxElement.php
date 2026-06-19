@@ -5,7 +5,6 @@ use burrow\Burrow\elements\actions\RetryOutboxAction;
 use burrow\Burrow\elements\conditions\OutboxCondition;
 use burrow\Burrow\elements\db\OutboxElementQuery;
 use burrow\Burrow\Plugin;
-use burrow\Burrow\services\QueueService;
 use Craft;
 use craft\base\Element;
 use craft\elements\actions\Delete;
@@ -216,6 +215,26 @@ class OutboxElement extends Element
         return UrlHelper::cpUrl('burrow/outbox');
     }
 
+    public function getAdditionalButtons(): string
+    {
+        if ($this->outboxId === '' || !$this->canRetryDelivery()) {
+            return '';
+        }
+
+        if (!Plugin::getInstance()->canDispatchToBurrow()) {
+            return Html::tag('p', Craft::t('burrow', 'Configure the Burrow connection and ingestion key in Settings to retry delivery.'), [
+                'class' => 'warning',
+            ]);
+        }
+
+        return Html::beginForm(UrlHelper::actionUrl('burrow/settings/retry-outbox'), 'post', ['class' => 'flex'])
+            . Html::hiddenInput(Craft::$app->getConfig()->getGeneral()->csrfTokenName, Craft::$app->getRequest()->getCsrfToken())
+            . Html::hiddenInput('id', $this->outboxId)
+            . Html::hiddenInput('return', 'burrow/outbox')
+            . Html::submitButton(Craft::t('burrow', 'Retry'), ['class' => 'btn submit'])
+            . Html::endForm();
+    }
+
     public function getUiLabel(): string
     {
         $channel = trim($this->channel);
@@ -254,35 +273,6 @@ class OutboxElement extends Element
     {
         $html = parent::metaFieldsHtml($static);
 
-        if (!$static && $this->outboxId !== '' && $this->id) {
-            $status = $this->outboxStatus ?: 'pending';
-            $canRetryState = in_array($status, ['failed', 'retrying', 'pending'], true);
-            if ($canRetryState) {
-                $html .= Html::beginTag('div', [
-                    'class' => 'meta',
-                    'style' => 'padding-top:14px;border-top:1px solid var(--hairline-color, #e5e7eb);',
-                ]);
-                $html .= Html::tag('h3', Craft::t('burrow', 'Delivery'), ['class' => 'heading', 'style' => 'margin-bottom:8px;']);
-                $html .= Html::tag('p', Craft::t('burrow', 'Automatic retries use up to {n} attempts (same default as the WordPress plugin).', ['n' => (string)QueueService::DEFAULT_MAX_ATTEMPTS]), [
-                    'style' => 'font-size:12px;opacity:0.85;margin:0 0 10px;',
-                ]);
-                if (Plugin::getInstance()->canDispatchToBurrow()) {
-                    $html .= Html::beginForm(UrlHelper::actionUrl('burrow/settings/retry-outbox'), 'post', ['style' => 'margin:0;']);
-                    $html .= Html::hiddenInput(Craft::$app->getConfig()->getGeneral()->csrfTokenName, Craft::$app->getRequest()->getCsrfToken());
-                    $html .= Html::hiddenInput('id', $this->outboxId);
-                    $html .= Html::hiddenInput('return', 'burrow/outbox/' . (int)$this->id);
-                    $html .= Html::submitButton(Craft::t('burrow', 'Retry now'), ['class' => 'btn submit']);
-                    $html .= Html::endForm();
-                } else {
-                    $html .= Html::tag('p', Craft::t('burrow', 'Configure the Burrow connection and ingestion key in Settings to retry delivery.'), [
-                        'class' => 'warning',
-                        'style' => 'font-size:12px;margin:0;',
-                    ]);
-                }
-                $html .= Html::endTag('div');
-            }
-        }
-
         $payload = $this->loadPayloadJson();
         if ($payload !== null) {
             $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -296,6 +286,11 @@ class OutboxElement extends Element
         }
 
         return $html;
+    }
+
+    private function canRetryDelivery(): bool
+    {
+        return in_array($this->outboxStatus ?: 'pending', ['failed', 'retrying', 'pending'], true);
     }
 
     private function statusBadgeHtml(): string

@@ -10,6 +10,13 @@
 
 {% block foot %}
     {{ parent() }}
+    {% if outboxFailedCount > 0 and canDispatchToBurrow %}
+        <form id="burrow-retry-all-failed-form" method="post" action="{{ actionUrl('burrow/settings/retry-failed-outbox') }}" class="hidden" style="margin: 0; display: inline-block;">
+            {{ csrfInput() }}
+            <input type="hidden" name="return" value="burrow/outbox">
+            <button type="submit" class="btn">{{ 'Retry all failed ({count})'|t('burrow', { count: outboxFailedCount }) }}</button>
+        </form>
+    {% endif %}
     {% js %}
         (function() {
             var type = '{{ elementType|e("js") }}';
@@ -25,6 +32,51 @@
                 ev.stopImmediatePropagation();
                 Craft.createElementEditor(type, {elementId: id});
             }, true);
+
+            var retryForm = document.getElementById('burrow-retry-all-failed-form');
+            if (!retryForm) return;
+
+            function isFailedSource() {
+                return !!document.querySelector('#sidebar a.sel[data-key="failed"]');
+            }
+
+            function mountRetryButton() {
+                var footer = document.getElementById('footer');
+                if (!footer) return;
+
+                var exportBtn = Array.from(footer.querySelectorAll('.btn, button')).find(function(btn) {
+                    return /export/i.test(btn.textContent || '');
+                });
+                var host = exportBtn ? exportBtn.parentElement : footer.querySelector('.buttons, .btngroup, .flex');
+                if (!host) return;
+
+                if (retryForm.parentElement !== host) {
+                    host.insertBefore(retryForm, exportBtn || null);
+                }
+
+                retryForm.classList.toggle('hidden', !isFailedSource());
+            }
+
+            function syncRetryButton() {
+                mountRetryButton();
+            }
+
+            var sidebar = document.getElementById('sidebar');
+            if (sidebar) {
+                sidebar.addEventListener('click', function() {
+                    setTimeout(syncRetryButton, 0);
+                });
+            }
+
+            var waitForIndex = setInterval(function() {
+                if (!Craft.elementIndex) return;
+                clearInterval(waitForIndex);
+                syncRetryButton();
+                if (typeof Craft.elementIndex.on === 'function') {
+                    Craft.elementIndex.on('updateSource', syncRetryButton);
+                    Craft.elementIndex.on('updateElements', syncRetryButton);
+                }
+            }, 50);
         })();
     {% endjs %}
 {% endblock %}

@@ -194,6 +194,30 @@ class QueueService extends Component
         return $ok;
     }
 
+    /**
+     * Reset every failed outbox row to pending and queue immediate delivery.
+     */
+    public function retryAllFailed(): int
+    {
+        $ids = Craft::$app->getDb()->createCommand(
+            "SELECT id FROM {{%burrow_outbox}} WHERE status = 'failed'"
+        )->queryColumn();
+
+        if (!is_array($ids) || $ids === []) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ($ids as $id) {
+            $id = trim((string)$id);
+            if ($id !== '' && $this->retryNow($id)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
     public function deleteRecord(string $id): bool
     {
         $ok = (bool)Craft::$app->getDb()->createCommand()->delete('{{%burrow_outbox}}', ['id' => $id])->execute();

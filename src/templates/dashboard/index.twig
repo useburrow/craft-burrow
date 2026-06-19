@@ -76,25 +76,46 @@
         </div>
     </div>
 
-    <div style="margin-bottom: 28px;">
-        <a class="btn" href="{{ cpUrl('burrow/settings') }}">Settings</a>
-        <a class="btn" href="{{ cpUrl('burrow/outbox') }}">View Outbox</a>
+    <div style="margin-bottom: 28px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <a class="btn" href="{{ cpUrl('burrow/settings') }}">{{ 'Settings'|t('burrow') }}</a>
+        <a class="btn" href="{{ cpUrl('burrow/outbox') }}">{{ 'View Outbox'|t('burrow') }}</a>
+        {% if queueStats.failed > 0 %}
+            {% if canDispatchToBurrow %}
+                <form method="post" action="{{ actionUrl('burrow/settings/retry-failed-outbox') }}" style="margin: 0;">
+                    {{ csrfInput() }}
+                    <input type="hidden" name="return" value="burrow">
+                    <button type="submit" class="btn submit">{{ 'Retry {count} failed'|t('burrow', { count: queueStats.failed }) }}</button>
+                </form>
+            {% else %}
+                <span class="burrow-card-detail">{{ 'Configure Burrow in Settings to retry failed records.'|t('burrow') }}</span>
+            {% endif %}
+        {% endif %}
     </div>
 
-    <h2>Form Contracts</h2>
+    {% if contractSyncMeta.syncedAt is defined and contractSyncMeta.syncedAt %}
+        <p class="burrow-card-detail" style="margin-bottom: 16px;">
+            {{ 'Last synced to Burrow:'|t('burrow') }} {{ contractSyncMeta.syncedAt }}
+            {% if contractSyncMeta.version is defined and contractSyncMeta.version %}
+                ({{ 'version'|t('burrow') }}: {{ contractSyncMeta.version }})
+            {% endif %}
+        </p>
+    {% endif %}
+
+    <h2>{{ 'Form Contracts'|t('burrow') }}</h2>
     <table class="data fullwidth">
         <thead>
         <tr>
-            <th>Provider</th>
-            <th>Form</th>
-            <th>Form ID</th>
-            <th>Mode</th>
-            <th>Fields</th>
+            <th>{{ 'Provider'|t('burrow') }}</th>
+            <th>{{ 'Form'|t('burrow') }}</th>
+            <th>{{ 'Form ID'|t('burrow') }}</th>
+            <th>{{ 'Mode'|t('burrow') }}</th>
+            <th>{{ 'Fields'|t('burrow') }}</th>
+            <th></th>
         </tr>
         </thead>
         <tbody>
         {% if contractRows is empty %}
-            <tr><td colspan="5">No active contracts.</td></tr>
+            <tr><td colspan="6">{{ 'No active contracts.'|t('burrow') }}</td></tr>
         {% else %}
             {% for row in contractRows %}
                 <tr>
@@ -103,6 +124,11 @@
                     <td>{{ row.externalFormId ?: '-' }}</td>
                     <td>{{ row.mode }}</td>
                     <td>{{ row.mappingCount }}</td>
+                    <td>
+                        {% if row.providerKey is defined and row.providerKey in formIntegrationIds %}
+                            <a href="{{ cpUrl('burrow/settings', { section: row.providerKey }) }}">{{ 'Edit'|t('burrow') }}</a>
+                        {% endif %}
+                    </td>
                 </tr>
             {% endfor %}
         {% endif %}

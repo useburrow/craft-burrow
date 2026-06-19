@@ -3,14 +3,30 @@ namespace burrow\Burrow\elements\actions;
 
 use burrow\Burrow\elements\OutboxElement;
 use burrow\Burrow\Plugin;
+use Craft;
 use craft\base\ElementAction;
+use craft\base\ElementInterface;
 use craft\elements\db\ElementQueryInterface;
 
 class RetryOutboxAction extends ElementAction
 {
     public function getTriggerLabel(): string
     {
-        return 'Retry selected';
+        return Craft::t('burrow', 'Retry selected');
+    }
+
+    public function isAvailable(?string $source): bool
+    {
+        return parent::isAvailable($source) && Plugin::getInstance()->canDispatchToBurrow();
+    }
+
+    public function isAvailableForElement(ElementInterface $element): bool
+    {
+        if (!$element instanceof OutboxElement || $element->outboxId === '') {
+            return false;
+        }
+
+        return in_array($element->outboxStatus, ['failed', 'retrying', 'pending'], true);
     }
 
     public function performAction(ElementQueryInterface $query): bool
@@ -28,9 +44,10 @@ class RetryOutboxAction extends ElementAction
             }
         }
 
-        $this->setMessage($count > 0
-            ? 'Queued ' . $count . ' record' . ($count === 1 ? '' : 's') . ' for retry.'
-            : 'No records were queued for retry.');
+        $message = $count === 1
+            ? Craft::t('burrow', 'Queued 1 record for retry.')
+            : Craft::t('burrow', 'Queued {count} records for retry.', ['count' => $count]);
+        $this->setMessage($count > 0 ? $message : Craft::t('burrow', 'No records were queued for retry.'));
 
         return true;
     }

@@ -378,47 +378,16 @@ class Plugin extends CraftPlugin
 
     private function _registerFormHooks(): void
     {
-        // Freeform v5: SubmissionsService::EVENT_AFTER_SUBMIT only runs when "Store Submissions" is on
-        // (see SubmissionsService::storeSubmission). Form::EVENT_AFTER_SUBMIT runs after every successful
-        // handleSubmission() completion, matching https://docs.solspace.com/craft/freeform/v5/developer/events/submission
-        $freeformFormClass = '\Solspace\Freeform\Form\Form';
-        $freeformFormEventConst = $freeformFormClass . '::EVENT_AFTER_SUBMIT';
-        if (class_exists($freeformFormClass) && defined($freeformFormEventConst)) {
-            /** @var string $eventName */
-            $eventName = constant($freeformFormEventConst);
-            Event::on(
-                $freeformFormClass,
-                $eventName,
-                function (\yii\base\Event $event): void {
-                    try {
-                        $this->getFormTracking()->handleFreeformSubmissionEvent($event);
-                    } catch (\Throwable $e) {
-                        $this->getLogs()->log('warning', 'Freeform submission event dispatch failed', 'freeform', 'forms', null, [
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
+        foreach ($this->getIntegrations()->getFormIntegrations()->all() as $adapter) {
+            $adapter->registerEventHooks(function (\yii\base\Event $event) use ($adapter): void {
+                try {
+                    $this->getFormTracking()->handleAdapterSubmissionEvent($adapter, $event);
+                } catch (\Throwable $e) {
+                    $this->getLogs()->log('warning', $adapter->getLabel() . ' submission event dispatch failed', $adapter->getId(), 'forms', null, [
+                        'error' => $e->getMessage(),
+                    ]);
                 }
-            );
-        }
-
-        $formieServiceClass = '\verbb\formie\services\Submissions';
-        $formieEventConst = $formieServiceClass . '::EVENT_AFTER_SUBMISSION';
-        if (class_exists($formieServiceClass) && defined($formieEventConst)) {
-            /** @var string $eventName */
-            $eventName = constant($formieEventConst);
-            Event::on(
-                $formieServiceClass,
-                $eventName,
-                function (\yii\base\Event $event): void {
-                    try {
-                        $this->getFormTracking()->handleFormieSubmissionEvent($event);
-                    } catch (\Throwable $e) {
-                        $this->getLogs()->log('warning', 'Formie submission event dispatch failed', 'formie', 'forms', null, [
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-            );
+            });
         }
     }
 

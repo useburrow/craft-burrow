@@ -1,17 +1,41 @@
 <?php
 namespace burrow\Burrow\services;
 
+use burrow\Burrow\integrations\forms\FormIntegrationAdapter;
+use burrow\Burrow\integrations\forms\FormIntegrationsRegistry;
+use burrow\Burrow\Plugin;
 use Craft;
 use craft\base\Component;
 
 class IntegrationsService extends Component
 {
+    private ?FormIntegrationsRegistry $_formIntegrations = null;
+
+    public function getFormIntegrations(): FormIntegrationsRegistry
+    {
+        if ($this->_formIntegrations === null) {
+            $this->_formIntegrations = new FormIntegrationsRegistry();
+        }
+
+        return $this->_formIntegrations;
+    }
+
+    public function getFormIntegration(string $id): ?FormIntegrationAdapter
+    {
+        return $this->getFormIntegrations()->get($id);
+    }
+
+    public function isFormIntegration(string $step): bool
+    {
+        return $this->getFormIntegrations()->has($step);
+    }
+
     /**
      * @return string[]
      */
     public function integrationOrder(): array
     {
-        return ['freeform', 'formie', 'commerce'];
+        return array_merge($this->getFormIntegrations()->ids(), ['commerce']);
     }
 
     /**
@@ -19,11 +43,13 @@ class IntegrationsService extends Component
      */
     public function integrationLabels(): array
     {
-        return [
-            'freeform' => 'Freeform',
-            'formie' => 'Formie',
-            'commerce' => 'Craft Commerce',
-        ];
+        $labels = [];
+        foreach ($this->getFormIntegrations()->all() as $adapter) {
+            $labels[$adapter->getId()] = $adapter->getLabel();
+        }
+        $labels['commerce'] = 'Craft Commerce';
+
+        return $labels;
     }
 
     /**
@@ -50,6 +76,330 @@ class IntegrationsService extends Component
         $steps['finish'] = 'Finish';
 
         return $steps;
+    }
+
+    /**
+     * @param string[] $selected
+     * @return array<string,string>
+     */
+    public function buildSettingsSections(array $selected): array
+    {
+        $sections = [
+            'overview' => 'Overview',
+            'integrations' => 'Integrations',
+        ];
+
+        $labels = $this->integrationLabels();
+        foreach ($this->integrationOrder() as $integration) {
+            if (!in_array($integration, $selected, true)) {
+                continue;
+            }
+            $sections[$integration] = (string)($labels[$integration] ?? $integration);
+        }
+
+        $sections['connection'] = 'Connection';
+
+        return $sections;
+    }
+
+    /**
+     * @param array<string,mixed> $capabilities
+     */
+    public function capabilitiesFingerprint(array $capabilities): string
+    {
+        return json_encode($capabilities, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @param bool $forceRelink When true, re-link the project with current capabilities (e.g. after integration selection changes).
+     * @param bool $publishSnapshot When true, publish a system stack snapshot (onboarding only; routine settings saves skip this).
+     * @return array{
+     *     ok:bool,
+     *     error:string,
+     *     runtimeState:array<string,mixed>,
+     *     relinked:bool,
+     *     contractsSynced:bool,
+     *     contractsCount:int,
+     *     snapshotSynced:bool,
+     *     notice:string
+     * }
+     */
+    public function syncConfiguration(array $runtimeState, bool $forceRelink = false, bool $publishSnapshot = false): array
+    {
+        $plugin = Plugin::getInstance();
+
+        if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
+            return [
+                'ok' => false,
+                'error' => Craft::t('burrow', 'Project is not linked yet.'),
+                'runtimeState' => $runtimeState,
+                'relinked' => false,
+                'contractsSynced' => false,
+                'contractsCount' => 0,
+                'snapshotSynced' => false,
+                'notice' => '',
+            ];
+        }
+
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
+            $missing = [];
+            if ($plugin->getBurrowBaseUrl() === '') {
+                $missing[] = Craft::t('burrow', 'base URL');
+            }
+            if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
+                $missing[] = Craft::t('burrow', 'linked project');
+            }
+            if (!$plugin->runtimeStateHasIngestionKey($runtimeState) && $plugin->getBurrowApiKey() === '') {
+                $missing[] = Craft::t('burrow', 'ingestion key');
+            }
+
+            return [
+                'ok' => false,
+                'error' => $missing !== []
+                    ? Craft::t('burrow', 'Burrow connection is not ready. Missing: {items}. Re-link the project if you recently rotated credentials.', [
+                        'items' => implode(', ', $missing),
+                    ])
+                    : Craft::t('burrow', 'Burrow connection is not ready. Check your linked project and credentials.'),
+                'runtimeState' => $runtimeState,
+                'relinked' => false,
+                'contractsSynced' => false,
+                'contractsCount' => 0,
+                'snapshotSynced' => false,
+                'notice' => '',
+            ];
+        }
+
+        $relinked = false;
+        if ($forceRelink) {
+            $selection = [
+                'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
+                'clientId' => trim((string)($runtimeState['clientId'] ?? '')),
+                'projectId' => trim((string)($runtimeState['projectId'] ?? '')),
+            ];
+            if ($selection['projectId'] === '') {
+                return [
+                    'ok' => false,
+                    'error' => Craft::t('burrow', 'Project is not linked yet.'),
+                    'runtimeState' => $runtimeState,
+                    'relinked' => false,
+                    'contractsSynced' => false,
+                    'contractsCount' => 0,
+                    'snapshotSynced' => false,
+                    'notice' => '',
+                ];
+            }
+
+            $link = $plugin->getBurrowApi()->link(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                $selection,
+                (array)($runtimeState['capabilities'] ?? []),
+                $runtimeState
+            );
+            if (!$link['ok']) {
+                $plugin->getLogs()->log('error', 'Project re-link failed during configuration sync', 'settings', 'system', null, [
+                    'error' => $link['error'],
+                ]);
+
+                return [
+                    'ok' => false,
+                    'error' => Craft::t('burrow', 'Project re-link failed: {error}', ['error' => $link['error']]),
+                    'runtimeState' => $runtimeState,
+                    'relinked' => false,
+                    'contractsSynced' => false,
+                    'contractsCount' => 0,
+                    'snapshotSynced' => false,
+                    'notice' => '',
+                ];
+            }
+
+            $runtimeState = $plugin->getBurrowApi()->applyLinkResult($runtimeState, $link);
+            $relinked = true;
+        }
+
+        $contracts = $this->buildFormsContracts($runtimeState);
+        $contractsSynced = false;
+        $contractsCount = count($contracts);
+
+        if ($contractsCount > 0) {
+            $result = $plugin->getBurrowApi()->submitFormsContracts(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                $runtimeState,
+                $contracts
+            );
+            if (!$result['ok']) {
+                $plugin->getLogs()->log('error', 'Forms contract sync failed', 'settings', 'system', null, [
+                    'error' => $result['error'],
+                ]);
+
+                return [
+                    'ok' => false,
+                    'error' => Craft::t('burrow', 'Contract sync failed: {error}', ['error' => $result['error']]),
+                    'runtimeState' => $runtimeState,
+                    'relinked' => $relinked,
+                    'contractsSynced' => false,
+                    'contractsCount' => $contractsCount,
+                    'snapshotSynced' => false,
+                    'notice' => '',
+                ];
+            }
+
+            $runtimeState['sdkState'] = is_array($result['sdkState'] ?? null) ? $result['sdkState'] : (array)($runtimeState['sdkState'] ?? []);
+            $contractMappings = is_array($result['contractMappings'] ?? null) ? $result['contractMappings'] : [];
+            if ($contractMappings !== []) {
+                $runtimeState['sdkState']['contractMappings'] = $contractMappings;
+            }
+            $projectSourceId = trim((string)($result['projectSourceId'] ?? ''));
+            if ($projectSourceId !== '') {
+                $runtimeState['projectSourceId'] = $projectSourceId;
+                $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
+                $sourceIds['forms'] = $projectSourceId;
+                if (trim((string)($sourceIds['ecommerce'] ?? '')) === '') {
+                    $sourceIds['ecommerce'] = $projectSourceId;
+                }
+                if (trim((string)($sourceIds['system'] ?? '')) === '') {
+                    $sourceIds['system'] = $projectSourceId;
+                }
+                $runtimeState['sourceIds'] = $sourceIds;
+            }
+            $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+            $integrationSettings['contractSync'] = [
+                'version' => trim((string)($result['contractsVersion'] ?? '')),
+                'syncedAt' => gmdate('c'),
+                'mappingCount' => is_array($result['contractMappings'] ?? null) ? count((array)$result['contractMappings']) : 0,
+            ];
+            $runtimeState['integrationSettings'] = $integrationSettings;
+            $contractsSynced = true;
+
+            $plugin->getLogs()->log('info', 'Forms contracts synced to Burrow', 'settings', 'system', null, [
+                'contractsCount' => $contractsCount,
+                'contractsVersion' => trim((string)($result['contractsVersion'] ?? '')),
+                'forms' => array_map(static function (array $contract): array {
+                    $customKeys = [];
+                    foreach ((array)($contract['fieldMappings'] ?? []) as $mapping) {
+                        if (!is_array($mapping)) {
+                            continue;
+                        }
+                        $key = trim((string)($mapping['canonicalKey'] ?? ''));
+                        if ($key === '' || in_array($key, ['submissionId', 'submittedAt', 'formId'], true)) {
+                            continue;
+                        }
+                        $customKeys[] = $key;
+                    }
+
+                    return [
+                        'provider' => trim((string)($contract['provider'] ?? '')),
+                        'externalFormId' => trim((string)($contract['externalFormId'] ?? '')),
+                        'contractId' => trim((string)($contract['contractId'] ?? '')),
+                        'fieldCount' => count($customKeys),
+                        'canonicalKeys' => $customKeys,
+                    ];
+                }, is_array($result['formsContracts'] ?? null) && $result['formsContracts'] !== []
+                    ? $result['formsContracts']
+                    : $contracts),
+            ]);
+        }
+
+        $snapshotSynced = false;
+        $snapshotResult = ['ok' => false, 'error' => ''];
+        if ($publishSnapshot) {
+            $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
+            $snapshotResult = $plugin->getBurrowApi()->publishSystemSnapshot(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                $runtimeState,
+                $runtimeState['lastSnapshot']
+            );
+            $snapshotSynced = (bool)($snapshotResult['ok'] ?? false);
+            if ($snapshotSynced) {
+                $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+                $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+                $systemJobs['snapshotLastRunAt'] = gmdate('c');
+                $systemJobs['snapshotQueuedAt'] = '';
+                $systemJobs['snapshotLastError'] = '';
+                $integrationSettings['systemJobs'] = $systemJobs;
+                $runtimeState['integrationSettings'] = $integrationSettings;
+            }
+        }
+
+        if (!$contractsSynced && !$relinked && !$snapshotSynced) {
+            return [
+                'ok' => false,
+                'error' => Craft::t('burrow', 'Nothing to sync to Burrow. Enable at least one integration or form contract.'),
+                'runtimeState' => $runtimeState,
+                'relinked' => $relinked,
+                'contractsSynced' => false,
+                'contractsCount' => 0,
+                'snapshotSynced' => false,
+                'notice' => '',
+            ];
+        }
+
+        if ($publishSnapshot && !$snapshotSynced && ($contractsSynced || $relinked)) {
+            $plugin->getLogs()->log('warning', 'Configuration synced but snapshot publish failed', 'settings', 'system', null, [
+                'error' => $snapshotResult['error'] ?? '',
+            ]);
+
+            return [
+                'ok' => true,
+                'error' => '',
+                'runtimeState' => $runtimeState,
+                'relinked' => $relinked,
+                'contractsSynced' => $contractsSynced,
+                'contractsCount' => $contractsCount,
+                'snapshotSynced' => false,
+                'notice' => Craft::t('burrow', 'Configuration synced to Burrow. Snapshot sync pending: {error}', [
+                    'error' => (string)($snapshotResult['error'] ?? ''),
+                ]),
+            ];
+        }
+
+        $plugin->getLogs()->log('info', 'Configuration synced to Burrow', 'settings', 'system', null, [
+            'relinked' => $relinked,
+            'contractsSynced' => $contractsSynced,
+            'contractsCount' => $contractsCount,
+            'snapshotSynced' => $snapshotSynced,
+        ]);
+
+        if ($contractsSynced) {
+            $mappingCount = 0;
+            foreach ($contracts as $contract) {
+                if (!is_array($contract['fieldMappings'] ?? null)) {
+                    continue;
+                }
+                foreach ((array)$contract['fieldMappings'] as $mapping) {
+                    if (!is_array($mapping)) {
+                        continue;
+                    }
+                    $key = trim((string)($mapping['canonicalKey'] ?? ''));
+                    if ($key === '' || in_array($key, ['submissionId', 'submittedAt', 'formId'], true)) {
+                        continue;
+                    }
+                    $mappingCount++;
+                }
+            }
+            $notice = Craft::t('burrow', 'Settings saved and synced to Burrow ({count} contract(s), {mappings} field mapping(s)).', [
+                'count' => (string)$contractsCount,
+                'mappings' => (string)$mappingCount,
+            ]);
+        } elseif ($relinked) {
+            $notice = Craft::t('burrow', 'Settings saved and project capabilities updated in Burrow.');
+        } else {
+            $notice = Craft::t('burrow', 'Settings saved and system snapshot published to Burrow.');
+        }
+
+        return [
+            'ok' => true,
+            'error' => '',
+            'runtimeState' => $runtimeState,
+            'relinked' => $relinked,
+            'contractsSynced' => $contractsSynced,
+            'contractsCount' => $contractsCount,
+            'snapshotSynced' => $snapshotSynced,
+            'notice' => $notice,
+        ];
     }
 
     /**
@@ -90,241 +440,43 @@ class IntegrationsService extends Component
      */
     public function getAvailableIntegrations(): array
     {
-        $labels = $this->integrationLabels();
+        $result = [];
+        foreach ($this->getFormIntegrations()->all() as $adapter) {
+            $result[$adapter->getId()] = $this->pluginStatus($adapter->getCraftPluginHandle(), $adapter->getLabel());
+        }
+        $result['commerce'] = $this->pluginStatus('commerce', 'Craft Commerce');
 
-        return [
-            'freeform' => $this->pluginStatus('freeform', (string)($labels['freeform'] ?? 'Freeform')),
-            'formie' => $this->pluginStatus('formie', (string)($labels['formie'] ?? 'Formie')),
-            'commerce' => $this->pluginStatus('commerce', (string)($labels['commerce'] ?? 'Craft Commerce')),
-        ];
+        return $result;
     }
 
     /**
-     * @return array<int,array<string,string>>
+     * @param array<string,mixed> $runtimeState
+     * @return array<string, array{forms: array<int, array<string, string>>, fieldsByFormId: array<string, array<int, array<string, string>>>}>
      */
-    public function getFreeformForms(): array
+    public function buildFormAdapterViewData(array $runtimeState): array
     {
-        $forms = [];
-        if (class_exists('\Solspace\Freeform\Freeform')) {
-            try {
-                $freeformForms = \Solspace\Freeform\Freeform::getInstance()->forms->getAllForms(true);
-                foreach ($freeformForms as $freeformForm) {
-                    $id = (string)($freeformForm->getId() ?? '');
-                    if ($id === '') {
-                        continue;
-                    }
-                    $forms[] = [
-                        'id' => $id,
-                        'name' => trim((string)($freeformForm->getName() ?? '')) ?: ('Form ' . $id),
-                        'handle' => (string)($freeformForm->getHandle() ?? ''),
-                    ];
-                }
-
-                return $forms;
-            } catch (\Throwable) {
-                return [];
-            }
-        }
-
-        return [];
-    }
-
-    /**
-     * @return array<int,array<string,string>>
-     */
-    public function getFreeformFields(string $formId): array
-    {
-        $fields = [];
-        if ($formId === '') {
-            return $fields;
-        }
-
-        if (!class_exists('\Solspace\Freeform\Freeform')) {
-            return $fields;
-        }
-
-        try {
-            $formModel = \Solspace\Freeform\Freeform::getInstance()->forms->getFormById((int)$formId);
-            if ($formModel === null) {
-                return $fields;
-            }
-
-            $layout = method_exists($formModel, 'getLayout')
-                ? $formModel->getLayout()
-                : (method_exists($formModel, 'getForm') ? $formModel->getForm()->getLayout() : null);
-            if ($layout === null || !method_exists($layout, 'getFields')) {
-                return $fields;
-            }
-
-            foreach ($layout->getFields() as $freeformField) {
-                if (!is_object($freeformField)) {
+        $data = [];
+        foreach ($this->getFormIntegrations()->all() as $adapter) {
+            $id = $adapter->getId();
+            $forms = $adapter->discoverForms();
+            $fieldsByFormId = [];
+            foreach ($forms as $form) {
+                $formId = (string)($form['id'] ?? '');
+                if ($formId === '') {
                     continue;
                 }
-                if (method_exists($freeformField, 'canStoreValues') && !$freeformField->canStoreValues()) {
-                    continue;
-                }
-
-                $handle = trim((string)($freeformField->getHandle() ?? ''));
-                if ($handle === '') {
-                    continue;
-                }
-
-                $sourceLabel = trim((string)($freeformField->getLabel() ?? $handle));
-                $sourceLabel = $sourceLabel !== '' ? $sourceLabel : $handle;
-                $fieldType = method_exists($freeformField, 'getType')
-                    ? trim((string)($freeformField->getType() ?? 'string'))
-                    : 'string';
-                $fields[] = [
-                    'externalFieldId' => $handle,
-                    'sourceLabel' => $sourceLabel,
-                    'dataType' => $fieldType !== '' ? $fieldType : 'string',
-                    'canonicalKey' => $this->labelToCanonicalKey($sourceLabel),
-                ];
+                $fieldsByFormId[$formId] = $adapter->discoverFields($formId);
             }
-        } catch (\Throwable) {
-            return [];
-        }
-
-        return $fields;
-    }
-
-    /**
-     * @return array<int,array<string,string>>
-     */
-    public function getFormieForms(): array
-    {
-        $formClass = '\verbb\formie\elements\Form';
-        if (!class_exists($formClass) || !method_exists($formClass, 'find')) {
-            return [];
-        }
-        try {
-            $rows = $formClass::find()
-                ->orderBy(['title' => SORT_ASC, 'dateCreated' => SORT_ASC])
-                ->all();
-        } catch (\Throwable) {
-            return [];
-        }
-
-        $forms = [];
-        foreach ($rows as $row) {
-            if (!is_object($row)) {
-                continue;
-            }
-            $id = $this->objectStringValue($row, ['id']);
-            if ($id === '') {
-                continue;
-            }
-            $name = $this->objectStringValue($row, ['title', 'name']);
-            $handle = $this->objectStringValue($row, ['handle']);
-            $forms[] = [
+            $data[$id] = [
                 'id' => $id,
-                'name' => $name !== '' ? $name : ($handle !== '' ? $handle : 'Untitled Form'),
-                'handle' => $handle,
+                'label' => $adapter->getLabel(),
+                'defaultPrefix' => $adapter->getDefaultPrefix(),
+                'forms' => $forms,
+                'fieldsByFormId' => $fieldsByFormId,
             ];
         }
 
-        return $forms;
-    }
-
-    /**
-     * Discover Formie fields for mapping (handles are used as submission value keys).
-     *
-     * @return array<int,array<string,string>>
-     */
-    public function getFormieFields(string $formId): array
-    {
-        $fields = [];
-        if ($formId === '') {
-            return $fields;
-        }
-        $formClass = '\verbb\formie\elements\Form';
-        if (!class_exists($formClass) || !method_exists($formClass, 'find')) {
-            return $fields;
-        }
-        try {
-            $form = $formClass::find()->id((int)$formId)->status(null)->one();
-            if ($form === null) {
-                return $fields;
-            }
-            $candidates = [];
-            if (method_exists($form, 'getCustomFields')) {
-                $raw = $form->getCustomFields();
-                if (is_array($raw)) {
-                    $candidates = $raw;
-                }
-            }
-            if ($candidates === [] && method_exists($form, 'getFieldLayout')) {
-                $layout = $form->getFieldLayout();
-                if ($layout !== null && method_exists($layout, 'getCustomFields')) {
-                    $custom = $layout->getCustomFields();
-                    if (is_array($custom)) {
-                        $candidates = $custom;
-                    }
-                }
-            }
-            if ($candidates === [] && method_exists($form, 'getPages')) {
-                foreach ($form->getPages() as $page) {
-                    if (!is_object($page) || !method_exists($page, 'getRows')) {
-                        continue;
-                    }
-                    foreach ($page->getRows() as $row) {
-                        if (!is_object($row) || !method_exists($row, 'getFields')) {
-                            continue;
-                        }
-                        foreach ($row->getFields() as $formField) {
-                            $candidates[] = $formField;
-                        }
-                    }
-                }
-            }
-            foreach ($candidates as $unionField) {
-                if (!is_object($unionField)) {
-                    continue;
-                }
-                $inner = $unionField;
-                if (method_exists($unionField, 'getField')) {
-                    try {
-                        $maybe = $unionField->getField();
-                        if (is_object($maybe)) {
-                            $inner = $maybe;
-                        }
-                    } catch (\Throwable) {
-                    }
-                }
-                $handle = '';
-                if (method_exists($inner, 'getHandle')) {
-                    $handle = trim((string)$inner->getHandle());
-                } elseif (isset($inner->handle)) {
-                    $handle = trim((string)$inner->handle);
-                }
-                if ($handle === '') {
-                    continue;
-                }
-                $label = $handle;
-                if (method_exists($inner, 'name') && is_string($inner->name) && trim($inner->name) !== '') {
-                    $label = trim($inner->name);
-                } elseif (method_exists($inner, 'getName')) {
-                    $label = trim((string)$inner->getName()) ?: $handle;
-                } elseif (method_exists($unionField, 'getLabel')) {
-                    $label = trim((string)$unionField->getLabel()) ?: $handle;
-                }
-                $classBase = basename(str_replace('\\', '/', get_class($inner)));
-                $dataType = strtolower((string)preg_replace('/Field$/', '', $classBase));
-                if ($dataType === '') {
-                    $dataType = 'string';
-                }
-                $fields[] = [
-                    'externalFieldId' => $handle,
-                    'sourceLabel' => $label !== '' ? $label : $handle,
-                    'dataType' => $dataType,
-                    'canonicalKey' => $this->labelToCanonicalKey($label !== '' ? $label : $handle),
-                ];
-            }
-        } catch (\Throwable) {
-            return [];
-        }
-
-        return $fields;
+        return $data;
     }
 
     /**
@@ -398,11 +550,10 @@ class IntegrationsService extends Component
     public function buildCapabilities(array $selected): array
     {
         $forms = [];
-        if (in_array('freeform', $selected, true)) {
-            $forms[] = 'freeform';
-        }
-        if (in_array('formie', $selected, true)) {
-            $forms[] = 'formie';
+        foreach ($this->getFormIntegrations()->all() as $adapter) {
+            if (in_array($adapter->getId(), $selected, true)) {
+                $forms[] = $adapter->getId();
+            }
         }
 
         return [
@@ -423,164 +574,18 @@ class IntegrationsService extends Component
             ? $runtimeState['integrationSettings']
             : [];
 
-        $freeformForms = [];
-        foreach ($this->getFreeformForms() as $form) {
-            $id = (string)($form['id'] ?? '');
-            if ($id === '') {
-                continue;
-            }
-            $freeformForms[$id] = $form;
-        }
-        $formieForms = [];
-        foreach ($this->getFormieForms() as $form) {
-            $id = (string)($form['id'] ?? '');
-            if ($id === '') {
-                continue;
-            }
-            $formieForms[$id] = $form;
+        foreach ($this->getFormIntegrations()->all() as $adapter) {
+            $config = is_array($integrationSettings[$adapter->getId()] ?? null)
+                ? $integrationSettings[$adapter->getId()]
+                : [];
+            $contracts = array_merge($contracts, $adapter->buildContracts($config, $runtimeState));
         }
 
-        $freeformConfig = is_array($integrationSettings['freeform'] ?? null) ? $integrationSettings['freeform'] : [];
-        $freeformPrefix = strtoupper(trim((string)($freeformConfig['prefix'] ?? ''))) ?: 'FF';
-        $freeformFormsConfig = is_array($freeformConfig['forms'] ?? null) ? $freeformConfig['forms'] : [];
-        foreach ($freeformFormsConfig as $formId => $config) {
-            if (!is_array($config)) {
-                continue;
-            }
-            $mode = trim((string)($config['mode'] ?? 'off'));
-            if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true) || $mode === 'off') {
-                continue;
-            }
-            $fields = is_array($config['fields'] ?? null) ? $config['fields'] : [];
-            $mappings = [];
-            if ($mode === 'custom_fields') {
-                foreach ($fields as $field) {
-                    if (!is_array($field)) {
-                        continue;
-                    }
-                    $target = trim((string)($field['target'] ?? ''));
-                    if (!in_array($target, ['properties', 'tags'], true)) {
-                        continue;
-                    }
-                    $mappings[] = [
-                        'externalFieldId' => trim((string)($field['externalFieldId'] ?? '')),
-                        'sourceLabel' => trim((string)($field['sourceLabel'] ?? '')),
-                        'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
-                        'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
-                        'target' => $target,
-                        'reportable' => $target === 'tags',
-                        'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
-                    ];
-                }
-            }
-            $mappings[] = [
-                'externalFieldId' => 'submission_id',
-                'sourceLabel' => 'Submission ID',
-                'dataType' => 'string',
-                'canonicalKey' => 'submissionId',
-                'target' => 'properties',
-                'reportable' => false,
-                'displayLabelOverride' => '',
-            ];
-            $mappings[] = [
-                'externalFieldId' => 'submitted_at',
-                'sourceLabel' => 'Submitted At',
-                'dataType' => 'string',
-                'canonicalKey' => 'submittedAt',
-                'target' => 'properties',
-                'reportable' => false,
-                'displayLabelOverride' => '',
-            ];
-            $known = $freeformForms[(string)$formId] ?? null;
-            $externalId = trim((string)($config['externalFormId'] ?? $formId));
-            $configFormName = trim((string)($config['formName'] ?? ''));
-            $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Freeform ' . $formId));
-            $formHandle = trim((string)($known['handle'] ?? ''));
-            $prefixLower = strtolower($freeformPrefix) . '_';
-            $contracts[] = [
-                'provider' => 'freeform',
-                'externalFormId' => str_starts_with($externalId, $prefixLower) ? $externalId : ($prefixLower . $externalId),
-                'formHandle' => $formHandle !== '' ? $formHandle : ('freeform-' . $formId),
-                'formName' => $formName,
-                'enabled' => true,
-                'countOnly' => $mode !== 'custom_fields',
-                'mode' => $mode,
-                'fieldMappings' => $mappings,
-                'icon' => null,
-            ];
+        if ($contracts === []) {
+            return [];
         }
 
-        $formieConfig = is_array($integrationSettings['formie'] ?? null) ? $integrationSettings['formie'] : [];
-        $formiePrefix = strtoupper(trim((string)($formieConfig['prefix'] ?? ''))) ?: 'FRM';
-        $formiePrefixLower = strtolower($formiePrefix) . '_';
-        $formieFormsConfig = is_array($formieConfig['forms'] ?? null) ? $formieConfig['forms'] : [];
-        foreach ($formieFormsConfig as $formId => $config) {
-            if (!is_array($config)) {
-                continue;
-            }
-            $mode = trim((string)($config['mode'] ?? 'off'));
-            if (!in_array($mode, ['off', 'count_only', 'custom_fields'], true) || $mode === 'off') {
-                continue;
-            }
-            $fields = is_array($config['fields'] ?? null) ? $config['fields'] : [];
-            $mappings = [];
-            if ($mode === 'custom_fields') {
-                foreach ($fields as $field) {
-                    if (!is_array($field)) {
-                        continue;
-                    }
-                    $target = trim((string)($field['target'] ?? ''));
-                    if (!in_array($target, ['properties', 'tags'], true)) {
-                        continue;
-                    }
-                    $mappings[] = [
-                        'externalFieldId' => trim((string)($field['externalFieldId'] ?? '')),
-                        'sourceLabel' => trim((string)($field['sourceLabel'] ?? '')),
-                        'dataType' => trim((string)($field['dataType'] ?? 'string')) ?: 'string',
-                        'canonicalKey' => trim((string)($field['canonicalKey'] ?? '')),
-                        'target' => $target,
-                        'reportable' => $target === 'tags',
-                        'displayLabelOverride' => trim((string)($field['displayLabelOverride'] ?? '')),
-                    ];
-                }
-            }
-            $mappings[] = [
-                'externalFieldId' => 'submission_id',
-                'sourceLabel' => 'Submission ID',
-                'dataType' => 'string',
-                'canonicalKey' => 'submissionId',
-                'target' => 'properties',
-                'reportable' => false,
-                'displayLabelOverride' => '',
-            ];
-            $mappings[] = [
-                'externalFieldId' => 'submitted_at',
-                'sourceLabel' => 'Submitted At',
-                'dataType' => 'string',
-                'canonicalKey' => 'submittedAt',
-                'target' => 'properties',
-                'reportable' => false,
-                'displayLabelOverride' => '',
-            ];
-            $known = $formieForms[(string)$formId] ?? null;
-            $externalId = trim((string)($config['externalFormId'] ?? $formId));
-            $configFormName = trim((string)($config['formName'] ?? ''));
-            $formName = $configFormName !== '' ? $configFormName : (trim((string)($known['name'] ?? '')) ?: ('Formie ' . $formId));
-            $formHandle = trim((string)($known['handle'] ?? ''));
-            $contracts[] = [
-                'provider' => 'formie',
-                'externalFormId' => str_starts_with($externalId, $formiePrefixLower) ? $externalId : ($formiePrefixLower . $externalId),
-                'formHandle' => $formHandle !== '' ? $formHandle : ('formie-' . $formId),
-                'formName' => $formName,
-                'enabled' => true,
-                'countOnly' => $mode !== 'custom_fields',
-                'mode' => $mode,
-                'fieldMappings' => $mappings,
-                'icon' => null,
-            ];
-        }
-
-        return $contracts;
+        return Plugin::getInstance()->getBurrowApi()->enrichFormsContracts($runtimeState, $contracts);
     }
 
     /**
@@ -607,7 +612,7 @@ class IntegrationsService extends Component
         $rows = [];
         foreach ($selected as $integration) {
             $status = 'Configured';
-            if (in_array($integration, ['freeform', 'formie'], true)) {
+            if ($this->isFormIntegration($integration)) {
                 $status = !empty($countsByProvider[$integration]) ? 'Configured' : 'Needs setup';
             } elseif ($integration === 'commerce') {
                 $commerce = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
@@ -691,50 +696,5 @@ class IntegrationsService extends Component
             'version' => $plugin->getVersion(),
             'iconDataUri' => $iconDataUri,
         ];
-    }
-
-    private function labelToCanonicalKey(string $label): string
-    {
-        $normalized = preg_replace('/[^a-z0-9]+/i', ' ', trim($label)) ?? '';
-        $words = preg_split('/\s+/', strtolower(trim($normalized))) ?: [];
-        $words = array_values(array_filter($words, static fn(string $word): bool => $word !== ''));
-        if ($words === []) {
-            return 'field';
-        }
-
-        $first = array_shift($words);
-        if ($first === null) {
-            return 'field';
-        }
-
-        $result = $first;
-        foreach ($words as $word) {
-            $result .= ucfirst($word);
-        }
-
-        return $result;
-    }
-
-    /**
-     * @param array<int,string> $keys
-     */
-    private function objectStringValue(object $source, array $keys): string
-    {
-        foreach ($keys as $key) {
-            if (method_exists($source, 'get' . ucfirst($key))) {
-                $value = $source->{'get' . ucfirst($key)}();
-                $text = trim((string)$value);
-                if ($text !== '') {
-                    return $text;
-                }
-            }
-            if (isset($source->{$key})) {
-                $text = trim((string)$source->{$key});
-                if ($text !== '') {
-                    return $text;
-                }
-            }
-        }
-        return '';
     }
 }

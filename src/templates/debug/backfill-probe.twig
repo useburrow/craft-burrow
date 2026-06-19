@@ -50,73 +50,28 @@
         </tbody>
     </table>
 
-    {% set sections = {
-        freeform: 'Freeform submissions',
-        formie: 'Formie submissions',
-        commerce: 'Commerce orders'
-    } %}
-
-    {% for key, label in sections %}
-        {% set section = attribute(probe, key) ?? {} %}
-        <h3>{{ label }}</h3>
+    {% for adapterId, section in probe.formProbes ?? {} %}
+        {% set adapterLabel = formAdapterLabels[adapterId] ?? adapterId %}
+        <h3>{{ adapterLabel }} submissions</h3>
         <p>
             <strong>Available:</strong> {{ section.available ? 'yes' : 'no' }},
             <strong>Scanned:</strong> {{ section.scanned ?? 0 }},
             <strong>In window:</strong> {{ section.inWindow ?? 0 }}
-            {% if key == 'commerce' %}
-                , <strong>Placed signal:</strong> {{ section.placedEligible ?? 0 }}
-                , <strong>Status signal present:</strong> {{ section.statusSignalPresent ?? 0 }}
-                , <strong>Backfill eligible:</strong> {{ section.backfillEligible ?? 0 }}
-            {% endif %}
             {% if section.error ?? '' %}
                 , <strong>Error:</strong> {{ section.error }}
             {% endif %}
         </p>
-
-        {% if key == 'commerce' and (section.statusBreakdown ?? []) is not empty %}
-            <h4 style="margin: 10px 0 6px;">Orders by status (in window)</h4>
-            <div class="burrow-probe-table-scroll" style="max-width: 600px;">
+        {% if section.samples is not empty %}
+            <h4 style="margin: 10px 0 6px;">Sample submissions</h4>
+            <div class="burrow-probe-table-scroll" style="max-width: 720px;">
             <table class="data fullwidth">
-                <thead>
-                    <tr><th>Status handle</th><th style="text-align:right">Orders</th><th style="text-align:right">Revenue</th></tr>
-                </thead>
+                <thead><tr><th>ID</th><th>Form ID</th><th>Timestamp</th></tr></thead>
                 <tbody>
-                {% for handle, count in section.statusBreakdown %}
+                {% for sample in section.samples %}
                     <tr>
-                        <td><code>{{ handle }}</code></td>
-                        <td style="text-align:right">{{ count }}</td>
-                        <td style="text-align:right">{{ (section.revenueByStatus[handle] ?? 0)|number_format(2) }}</td>
-                    </tr>
-                {% endfor %}
-                <tr style="font-weight:700; border-top:2px solid #ccc;">
-                    <td>Total</td>
-                    <td style="text-align:right">{{ section.inWindow ?? 0 }}</td>
-                    <td style="text-align:right">{{ (section.totalRevenue ?? 0)|number_format(2) }}</td>
-                </tr>
-                </tbody>
-            </table>
-            </div>
-        {% endif %}
-
-        {% set samples = section.samples ?? [] %}
-        {% if samples is empty %}
-            <p class="light">No sample records.</p>
-        {% else %}
-            <div class="burrow-probe-table-scroll">
-            <table class="data fullwidth">
-                <thead>
-                <tr>
-                    {% for column, value in samples[0] %}
-                        <th>{{ column }}</th>
-                    {% endfor %}
-                </tr>
-                </thead>
-                <tbody>
-                {% for sample in samples %}
-                    <tr>
-                        {% for column, value in sample %}
-                            <td>{{ value is same as(null) ? '-' : value }}</td>
-                        {% endfor %}
+                        <td>{{ sample.id }}</td>
+                        <td>{{ sample.formId }}</td>
+                        <td>{{ sample.timestamp }}</td>
                     </tr>
                 {% endfor %}
                 </tbody>
@@ -124,4 +79,69 @@
             </div>
         {% endif %}
     {% endfor %}
+
+    {% set commerceSection = probe.commerce ?? {} %}
+    <h3>Commerce orders</h3>
+    <p>
+        <strong>Available:</strong> {{ commerceSection.available ? 'yes' : 'no' }},
+        <strong>Scanned:</strong> {{ commerceSection.scanned ?? 0 }},
+        <strong>In window:</strong> {{ commerceSection.inWindow ?? 0 }}
+        , <strong>Placed signal:</strong> {{ commerceSection.placedEligible ?? 0 }}
+        , <strong>Status signal present:</strong> {{ commerceSection.statusSignalPresent ?? 0 }}
+        , <strong>Backfill eligible:</strong> {{ commerceSection.backfillEligible ?? 0 }}
+        {% if commerceSection.error ?? '' %}
+            , <strong>Error:</strong> {{ commerceSection.error }}
+        {% endif %}
+    </p>
+
+    {% if (commerceSection.statusBreakdown ?? []) is not empty %}
+        <h4 style="margin: 10px 0 6px;">Orders by status (in window)</h4>
+        <div class="burrow-probe-table-scroll" style="max-width: 600px;">
+        <table class="data fullwidth">
+            <thead>
+                <tr><th>Status handle</th><th style="text-align:right">Orders</th><th style="text-align:right">Revenue</th></tr>
+            </thead>
+            <tbody>
+            {% for handle, count in commerceSection.statusBreakdown %}
+                <tr>
+                    <td><code>{{ handle }}</code></td>
+                    <td style="text-align:right">{{ count }}</td>
+                    <td style="text-align:right">{{ (commerceSection.revenueByStatus[handle] ?? 0)|number_format(2) }}</td>
+                </tr>
+            {% endfor %}
+            <tr style="font-weight:700; border-top:2px solid #ccc;">
+                <td>Total</td>
+                <td style="text-align:right">{{ commerceSection.inWindow ?? 0 }}</td>
+                <td style="text-align:right">{{ (commerceSection.totalRevenue ?? 0)|number_format(2) }}</td>
+            </tr>
+            </tbody>
+        </table>
+        </div>
+    {% endif %}
+
+    {% set commerceSamples = commerceSection.samples ?? [] %}
+    {% if commerceSamples is empty %}
+        <p class="light">No commerce sample records.</p>
+    {% else %}
+        <div class="burrow-probe-table-scroll">
+        <table class="data fullwidth">
+            <thead>
+            <tr>
+                {% for column, value in commerceSamples[0] %}
+                    <th>{{ column }}</th>
+                {% endfor %}
+            </tr>
+            </thead>
+            <tbody>
+            {% for sample in commerceSamples %}
+                <tr>
+                    {% for column, value in sample %}
+                        <td>{{ value is same as(null) ? '-' : value }}</td>
+                    {% endfor %}
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    {% endif %}
 {% endblock %}

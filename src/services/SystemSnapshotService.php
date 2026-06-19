@@ -6,6 +6,40 @@ use craft\base\Component;
 
 class SystemSnapshotService extends Component
 {
+    public const RECENT_PUBLISH_WINDOW_SECONDS = 900;
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     */
+    public function snapshotLastRunTimestamp(array $runtimeState): int
+    {
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+        $value = trim((string)($systemJobs['snapshotLastRunAt'] ?? ''));
+        if ($value === '') {
+            return 0;
+        }
+
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? 0 : (int)$timestamp;
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     */
+    public function wasPublishedRecently(array $runtimeState, ?int $windowSeconds = null): bool
+    {
+        $lastRun = $this->snapshotLastRunTimestamp($runtimeState);
+        if ($lastRun === 0) {
+            return false;
+        }
+
+        $window = $windowSeconds ?? self::RECENT_PUBLISH_WINDOW_SECONDS;
+
+        return (time() - $lastRun) < $window;
+    }
+
     /**
      * @return array<string,mixed>
      */

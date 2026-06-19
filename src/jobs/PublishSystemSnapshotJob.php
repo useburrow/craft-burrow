@@ -31,6 +31,22 @@ class PublishSystemSnapshotJob extends BaseJob
             return;
         }
 
+        if (trim((string)($runtimeState['connectionApiKey'] ?? '')) !== '') {
+            $plugin->getLogs()->log('info', 'Skipped scheduled snapshot publish (connection bootstrap in progress)', 'system', 'system');
+            $integrationSettings['systemJobs'] = $systemJobs;
+            $runtimeState['integrationSettings'] = $integrationSettings;
+            $plugin->getState()->saveState($runtimeState);
+            return;
+        }
+
+        if ($plugin->getSnapshot()->wasPublishedRecently($runtimeState)) {
+            $plugin->getLogs()->log('info', 'Skipped scheduled snapshot publish (recent snapshot already sent)', 'system', 'system');
+            $integrationSettings['systemJobs'] = $systemJobs;
+            $runtimeState['integrationSettings'] = $integrationSettings;
+            $plugin->getState()->saveState($runtimeState);
+            return;
+        }
+
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
         $result = $plugin->getBurrowApi()->publishSystemSnapshot(
             $plugin->getBurrowBaseUrl(),

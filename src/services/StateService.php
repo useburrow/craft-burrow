@@ -4,6 +4,7 @@ namespace burrow\Burrow\services;
 use craft\base\Component;
 
 use burrow\Burrow\helpers\CredentialCrypto;
+use burrow\Burrow\Plugin;
 use burrow\Burrow\records\RuntimeStateRecord;
 
 class StateService extends Component
@@ -49,6 +50,11 @@ class StateService extends Component
      */
     public function saveState(array $state): bool
     {
+        $resolvedIngestion = Plugin::getInstance()->resolveIngestionKey($state);
+        if ($resolvedIngestion['key'] !== '') {
+            $state['ingestionKey'] = $resolvedIngestion;
+        }
+
         $record = RuntimeStateRecord::find()->one();
         if (!$record) {
             $record = new RuntimeStateRecord();

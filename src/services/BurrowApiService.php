@@ -4,6 +4,8 @@ namespace burrow\Burrow\services;
 use Craft;
 use craft\base\Component;
 
+use burrow\Burrow\Plugin;
+
 class BurrowApiService extends Component
 {
     public function isSdkAvailable(): bool
@@ -136,11 +138,11 @@ class BurrowApiService extends Component
             $runtimeState['sourceIds'] = $sourceIds;
         }
 
-        $runtimeState['ingestionKey'] = [
-            'key' => (string)($ingestionKey['key'] ?? ''),
-            'projectId' => (string)($ingestionKey['projectId'] ?? ''),
-            'keyPrefix' => (string)($ingestionKey['keyPrefix'] ?? ''),
-        ];
+        $runtimeState['ingestionKey'] = $this->resolveIngestionKeyPayload(
+            $runtimeState,
+            $ingestionKey,
+            $sdkState
+        );
 
         $runtimeState['burrowProject'] = [
             'name' => (string)($project['name'] ?? ''),
@@ -162,7 +164,7 @@ class BurrowApiService extends Component
                 $baseUrl,
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
-                $runtimeState['ingestionKey'] ?? [],
+                Plugin::getInstance()->resolveIngestionKey($runtimeState),
                 true,
                 false,
                 $runtimeState
@@ -199,7 +201,7 @@ class BurrowApiService extends Component
                 $baseUrl,
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
-                $runtimeState['ingestionKey'] ?? [],
+                Plugin::getInstance()->resolveIngestionKey($runtimeState),
                 true,
                 false,
                 $runtimeState
@@ -228,11 +230,12 @@ class BurrowApiService extends Component
     public function submitFormsContracts(string $baseUrl, string $apiKey, array $runtimeState, array $formsContracts): array
     {
         try {
+            $formsContracts = $this->enrichFormsContractsForSubmission($runtimeState, $formsContracts);
             $client = $this->createClient(
                 $baseUrl,
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
-                $runtimeState['ingestionKey'] ?? [],
+                Plugin::getInstance()->resolveIngestionKey($runtimeState),
                 true,
                 false,
                 $runtimeState
@@ -296,7 +299,7 @@ class BurrowApiService extends Component
                 $baseUrl,
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
-                $runtimeState['ingestionKey'] ?? [],
+                Plugin::getInstance()->resolveIngestionKey($runtimeState),
                 true,
                 false,
                 $runtimeState,
@@ -382,7 +385,7 @@ class BurrowApiService extends Component
                 $baseUrl,
                 $apiKey,
                 $runtimeState['sdkState'] ?? [],
-                $runtimeState['ingestionKey'] ?? [],
+                Plugin::getInstance()->resolveIngestionKey($runtimeState),
                 true,
                 false,
                 $runtimeState
@@ -1068,6 +1071,66 @@ class BurrowApiService extends Component
     }
 
     /**
+     * @param array<string,mixed> $runtimeState
+     * @param array<int,array<string,mixed>> $formsContracts
+     * @return array<int,array<string,mixed>>
+     */
+    public function enrichFormsContracts(array $runtimeState, array $formsContracts): array
+    {
+        return $this->enrichFormsContractsForSubmission($runtimeState, $formsContracts);
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @param array<int,array<string,mixed>> $formsContracts
+     * @return array<int,array<string,mixed>>
+     */
+    private function enrichFormsContractsForSubmission(array $runtimeState, array $formsContracts): array
+    {
+        $sdkState = is_array($runtimeState['sdkState'] ?? null) ? $runtimeState['sdkState'] : [];
+        $storedMappings = is_array($sdkState['contractMappings'] ?? null) ? $sdkState['contractMappings'] : [];
+        $contractIdByExternalFormId = [];
+        $contractIdByFormHandle = [];
+        foreach ($storedMappings as $mapping) {
+            if (!is_array($mapping)) {
+                continue;
+            }
+            $contractId = trim((string)($mapping['contractId'] ?? ''));
+            if ($contractId === '') {
+                continue;
+            }
+            $externalFormId = trim((string)($mapping['externalFormId'] ?? ''));
+            if ($externalFormId !== '') {
+                $contractIdByExternalFormId[$externalFormId] = $contractId;
+            }
+            $formHandle = trim((string)($mapping['formHandle'] ?? ''));
+            if ($formHandle !== '') {
+                $contractIdByFormHandle[$formHandle] = $contractId;
+            }
+        }
+
+        foreach ($formsContracts as $index => $contract) {
+            if (!is_array($contract)) {
+                continue;
+            }
+            if (trim((string)($contract['contractId'] ?? '')) !== '') {
+                continue;
+            }
+            $externalFormId = trim((string)($contract['externalFormId'] ?? ''));
+            $formHandle = trim((string)($contract['formHandle'] ?? ''));
+            $contractId = $contractIdByExternalFormId[$externalFormId] ?? '';
+            if ($contractId === '' && $formHandle !== '') {
+                $contractId = $contractIdByFormHandle[$formHandle] ?? '';
+            }
+            if ($contractId !== '') {
+                $formsContracts[$index]['contractId'] = $contractId;
+            }
+        }
+
+        return $formsContracts;
+    }
+
+    /**
      * @param array<int,array<string,mixed>> $formsContracts
      */
     private function buildFormsContractPayload(array $runtimeState, array $formsContracts): array
@@ -1130,7 +1193,7 @@ class BurrowApiService extends Component
         if ($clientId !== '') {
             $merged['clientId'] = $clientId;
         }
-        $ingestion = is_array($runtimeState['ingestionKey'] ?? null) ? trim((string)($runtimeState['ingestionKey']['key'] ?? '')) : '';
+        $ingestion = Plugin::getInstance()->resolveIngestionKey($runtimeState)['key'];
         if ($ingestion !== '') {
             $merged['ingestionKey'] = $ingestion;
         }
@@ -1140,6 +1203,51 @@ class BurrowApiService extends Component
         }
 
         return $merged;
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @param array<string,mixed> $linkIngestionKey
+     * @param array<string,mixed> $sdkState
+     * @return array{key:string,projectId:string,keyPrefix:string}
+     */
+    private function resolveIngestionKeyPayload(array $runtimeState, array $linkIngestionKey, array $sdkState): array
+    {
+        $existing = is_array($runtimeState['ingestionKey'] ?? null) ? $runtimeState['ingestionKey'] : [];
+        $resolvedKey = trim((string)($linkIngestionKey['key'] ?? ''));
+        if ($resolvedKey === '' && $sdkState !== []) {
+            $resolvedKey = trim((string)($sdkState['ingestionKey'] ?? ''));
+        }
+
+        $existingKey = trim((string)($existing['key'] ?? ''));
+        if ($resolvedKey === '' && $existingKey !== '') {
+            return [
+                'key' => $existingKey,
+                'projectId' => trim((string)($existing['projectId'] ?? '')) !== ''
+                    ? (string)$existing['projectId']
+                    : trim((string)($runtimeState['projectId'] ?? '')),
+                'keyPrefix' => (string)($existing['keyPrefix'] ?? ''),
+            ];
+        }
+
+        $projectId = trim((string)($linkIngestionKey['projectId'] ?? ''));
+        if ($projectId === '') {
+            $projectId = trim((string)($existing['projectId'] ?? ''));
+        }
+        if ($projectId === '') {
+            $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        }
+
+        $keyPrefix = trim((string)($linkIngestionKey['keyPrefix'] ?? ''));
+        if ($keyPrefix === '') {
+            $keyPrefix = (string)($existing['keyPrefix'] ?? '');
+        }
+
+        return [
+            'key' => $resolvedKey,
+            'projectId' => $projectId,
+            'keyPrefix' => $keyPrefix,
+        ];
     }
 
     private function createClient(

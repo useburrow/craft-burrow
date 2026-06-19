@@ -1,0 +1,78 @@
+{% set settingsMode = settingsMode|default(false) %}
+{% set saveIntegrationsAction = settingsMode ? 'burrow/settings/save-integrations-settings' : 'burrow/settings/save-integrations' %}
+{% set submitLabel = settingsMode ? 'Save & Sync to Burrow'|t('burrow') : 'Save Integrations'|t('burrow') %}
+<p class="burrow-muted">{{ 'Select integration providers to bridge into Burrow.'|t('burrow') }}</p>
+{% if settingsMode %}
+    <p class="burrow-muted">{{ 'Removing an integration clears its local configuration. Burrow may retain historical contracts until you update sync.'|t('burrow') }}</p>
+{% endif %}
+{% set integrationDescriptions = {
+    freeform: 'Capture Freeform submissions and sync contracts to Burrow.',
+    formie: 'Capture Formie submissions with count-only or custom-field mappings.',
+    commerce: 'Sync Commerce order and item lifecycle events to Burrow.'
+} %}
+
+<form method="post" action="{{ actionUrl(saveIntegrationsAction) }}">
+    {{ csrfInput() }}
+    {% if availableIntegrations is empty %}
+        <p class="burrow-muted">{{ 'No supported integrations are currently installed.'|t('burrow') }}</p>
+    {% else %}
+        <div class="burrow-integration-grid">
+        {% for key, integration in availableIntegrations %}
+            {% set isInstalled = integration.installed %}
+            {% set isChecked = key in state.selectedIntegrations %}
+            <div class="burrow-integration-card {{ isChecked ? 'is-selected' : '' }} {{ not isInstalled ? 'is-disabled' : '' }}">
+                <label class="burrow-integration-card-label">
+                    <input
+                        class="burrow-integration-checkbox burrow-integration-check"
+                        type="checkbox"
+                        name="integrations[]"
+                        value="{{ key }}"
+                        {{ isChecked ? 'checked' : '' }}
+                        {{ not isInstalled ? 'disabled' : '' }}
+                    >
+                    <span>
+                        <span class="burrow-integration-icon-wrap" aria-hidden="true">
+                            {% if integration.iconDataUri %}
+                                <img src="{{ integration.iconDataUri }}" alt="">
+                            {% else %}
+                                <span class="burrow-integration-fallback">{{ (integration.label|slice(0, 1))|upper }}</span>
+                            {% endif %}
+                        </span>
+                        <span class="burrow-integration-title">{{ integration.label }}</span>
+                        <div class="burrow-integration-meta">{{ 'Version:'|t('burrow') }} {{ integration.version ?: '-' }}</div>
+                        <div class="burrow-integration-description">{{ integrationDescriptions[key] ?? 'Bridge this provider into Burrow event and contract flows.'|t('burrow') }}</div>
+                        <span class="burrow-integration-status">{{ isInstalled ? 'Installed'|t('burrow') : 'Not installed'|t('burrow') }}</span>
+                    </span>
+                </label>
+            </div>
+        {% endfor %}
+        </div>
+    {% endif %}
+    <div style="margin-top: 15px;">
+        <button id="burrow-save-integrations" class="btn submit" {{ availableIntegrations is empty ? 'disabled' : '' }}>{{ submitLabel }}</button>
+    </div>
+</form>
+<script>
+    (() => {
+        const boxes = Array.from(document.querySelectorAll('.burrow-integration-checkbox'));
+        const submit = document.getElementById('burrow-save-integrations');
+        if (!boxes.length || !submit) {
+            return;
+        }
+        const syncCards = () => {
+            boxes.forEach((box) => {
+                const card = box.closest('.burrow-integration-card');
+                if (!card) {
+                    return;
+                }
+                card.classList.toggle('is-selected', box.checked);
+            });
+        };
+        const sync = () => {
+            submit.disabled = boxes.filter((box) => box.checked).length === 0;
+            syncCards();
+        };
+        boxes.forEach((box) => box.addEventListener('change', sync));
+        sync();
+    })();
+</script>

@@ -1,0 +1,202 @@
+{% extends "_layouts/cp" %}
+{% import "_includes/forms" as forms %}
+
+{% set title = "Settings"|t('burrow') %}
+{% set selectedNavItem = 'burrow' %}
+{% set selectedSubnavItem = selectedSubnavItem ?? 'settings' %}
+{% set fullPageForm = false %}
+{% set crumbs = [
+    { label: 'Burrow'|t('burrow'), url: cpUrl('burrow') },
+] %}
+
+{% set sectionTitles = {
+    overview: 'Overview',
+    integrations: 'Integrations',
+    freeform: 'Freeform',
+    formie: 'Formie',
+    commerce: 'Craft Commerce',
+    connection: 'Connection',
+} %}
+
+{% block sidebar %}
+    <nav>
+        <ul>
+            {% for sectionKey, sectionLabel in settingsSections %}
+                <li>
+                    <a href="{{ cpUrl('burrow/settings', { section: sectionKey }) }}" class="{{ sectionKey == section ? 'sel' : '' }}">
+                        {{ sectionLabel }}
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    </nav>
+{% endblock %}
+
+{% block content %}
+    {% include 'burrow/settings/_settings-styles' %}
+
+    <div class="burrow-card">
+        {% if not sdkAvailable %}
+            <p class="warning with-icon">
+                {{ 'Burrow PHP SDK is not available. Install `useburrow/sdk-php` before syncing.'|t('burrow') }}
+            </p>
+        {% endif %}
+
+        <h2>{{ sectionTitles[section] ?? 'Settings'|t('burrow') }}</h2>
+
+        {% if section == 'overview' %}
+            <p class="burrow-muted">{{ 'Manage integrations and sync configuration to your linked Burrow project.'|t('burrow') }}</p>
+
+            <table class="data fullwidth" style="max-width:960px; margin-top: 16px;">
+                <tbody>
+                <tr>
+                    <th>{{ 'Connected Project'|t('burrow') }}</th>
+                    <td>
+                        <code>{{ state.projectId ?: '-' }}</code>
+                        {% if projectUrl %}
+                            &nbsp;<a href="{{ projectUrl }}" target="_blank" rel="noopener noreferrer">{{ 'View in Burrow'|t('burrow') }} &#8594;</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>{{ 'Last Sync'|t('burrow') }}</th>
+                    <td>
+                        {% if contractSyncMeta.syncedAt is defined and contractSyncMeta.syncedAt %}
+                            {{ contractSyncMeta.syncedAt }}
+                            {% if contractSyncMeta.version is defined and contractSyncMeta.version %}
+                                ({{ 'version'|t('burrow') }}: {{ contractSyncMeta.version }})
+                            {% endif %}
+                        {% else %}
+                            <span class="burrow-muted">{{ 'Not yet synced'|t('burrow') }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>{{ 'Integrations'|t('burrow') }}</th>
+                    <td>
+                        {% if integrationSummaryRows is empty %}
+                            <span class="burrow-muted">{{ 'None selected'|t('burrow') }}</span>
+                        {% else %}
+                            {% for row in integrationSummaryRows %}
+                                <span class="burrow-setup-icon">
+                                    {% if row.iconDataUri %}
+                                        <img class="burrow-menu-glyph" src="{{ row.iconDataUri }}" alt="" aria-hidden="true">
+                                    {% else %}
+                                        <span class="burrow-icon-dot">{{ (row.label|slice(0, 1))|upper }}</span>
+                                    {% endif %}
+                                    <strong>{{ row.label }}</strong>
+                                    {% if row.detail %}
+                                        <span class="burrow-muted">{{ row.detail }}</span>
+                                    {% endif %}
+                                </span>
+                            {% endfor %}
+                        {% endif %}
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+
+            <div class="burrow-review-actions">
+                <form method="post" action="{{ actionUrl('burrow/settings/sync-to-burrow') }}">
+                    {{ csrfInput() }}
+                    <input type="hidden" name="returnSection" value="overview">
+                    <button class="btn">{{ 'Sync Now'|t('burrow') }}</button>
+                </form>
+            </div>
+
+            <h3 style="margin-top: 24px;">{{ 'Active Contracts'|t('burrow') }}</h3>
+            <table class="data fullwidth" style="max-width:900px;">
+                <thead>
+                <tr>
+                    <th>{{ 'Provider'|t('burrow') }}</th>
+                    <th>{{ 'Form'|t('burrow') }}</th>
+                    <th>{{ 'Form ID'|t('burrow') }}</th>
+                    <th>{{ 'Mode'|t('burrow') }}</th>
+                    <th>{{ 'Mapped Fields'|t('burrow') }}</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                {% if contractRows is empty %}
+                    <tr><td colspan="6">{{ 'No active contracts.'|t('burrow') }}</td></tr>
+                {% else %}
+                    {% for row in contractRows %}
+                        <tr>
+                            <td>{{ row.provider }}</td>
+                            <td>{{ row.formName ?: '-' }}</td>
+                            <td>{{ row.externalFormId ?: '-' }}</td>
+                            <td>{{ row.mode }}</td>
+                            <td>{{ row.mappingCount }}</td>
+                            <td>
+                                {% if row.providerKey in formIntegrationIds %}
+                                    <a href="{{ cpUrl('burrow/settings', { section: row.providerKey }) }}">{{ 'Edit'|t('burrow') }}</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% endif %}
+                </tbody>
+            </table>
+
+            <div class="burrow-settings-links">
+                <a class="btn" href="{{ cpUrl('burrow/settings', { section: 'integrations' }) }}">{{ 'Manage Integrations'|t('burrow') }}</a>
+                <a class="btn" href="{{ cpUrl('burrow/dashboard') }}">{{ 'Dashboard'|t('burrow') }}</a>
+            </div>
+
+        {% elseif section == 'integrations' %}
+            {% include 'burrow/settings/_integrations-picker' with { settingsMode: true } %}
+
+        {% elseif section in formIntegrationIds %}
+            {% set adapterView = integrationStepData.formAdapterViewData[section] ?? null %}
+            {% if section not in state.selectedIntegrations %}
+                <p class="burrow-muted">{{ (adapterView.label ?? section) ~ ' is not enabled. Enable it under Integrations first.' }}</p>
+                <p><a class="btn" href="{{ cpUrl('burrow/settings', { section: 'integrations' }) }}">{{ 'Go to Integrations'|t('burrow') }}</a></p>
+            {% elseif adapterView %}
+                {% include 'burrow/settings/_form-config' with {
+                    settingsMode: true,
+                    formAdapterId: adapterView.id,
+                    formAdapterLabel: adapterView.label,
+                    formAdapterDefaultPrefix: adapterView.defaultPrefix,
+                    formAdapterData: adapterView,
+                } %}
+            {% endif %}
+
+        {% elseif section == 'commerce' %}
+            {% if 'commerce' not in state.selectedIntegrations %}
+                <p class="burrow-muted">{{ 'Craft Commerce is not enabled. Enable it under Integrations first.'|t('burrow') }}</p>
+                <p><a class="btn" href="{{ cpUrl('burrow/settings', { section: 'integrations' }) }}">{{ 'Go to Integrations'|t('burrow') }}</a></p>
+            {% else %}
+                {% include 'burrow/settings/_commerce-config' with { settingsMode: true } %}
+            {% endif %}
+
+        {% elseif section == 'connection' %}
+            <p class="burrow-muted">{{ 'Connection details for your linked Burrow project. Use the setup wizard to change the linked project or re-authenticate.'|t('burrow') }}</p>
+
+            <table class="data fullwidth" style="max-width:720px; margin-top: 16px;">
+                <tbody>
+                <tr>
+                    <th>{{ 'Base URL'|t('burrow') }}</th>
+                    <td><code>{{ settings.baseUrl ?: '-' }}</code></td>
+                </tr>
+                <tr>
+                    <th>{{ 'Project ID'|t('burrow') }}</th>
+                    <td><code>{{ state.projectId ?: '-' }}</code></td>
+                </tr>
+                <tr>
+                    <th>{{ 'Organization ID'|t('burrow') }}</th>
+                    <td><code>{{ state.organizationId ?: '-' }}</code></td>
+                </tr>
+                <tr>
+                    <th>{{ 'Client ID'|t('burrow') }}</th>
+                    <td><code>{{ state.clientId ?: '-' }}</code></td>
+                </tr>
+                </tbody>
+            </table>
+
+            <div class="burrow-settings-links">
+                <a class="btn" href="{{ cpUrl('burrow/setup', { step: 'connection', relink: '1' }) }}">{{ 'Re-link Project'|t('burrow') }}</a>
+                <a class="btn" href="{{ cpUrl('burrow/dashboard') }}">{{ 'Dashboard'|t('burrow') }}</a>
+            </div>
+        {% endif %}
+    </div>
+{% endblock %}

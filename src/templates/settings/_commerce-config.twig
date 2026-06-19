@@ -1,0 +1,144 @@
+{% import "_includes/forms" as forms %}
+{% set settingsMode = settingsMode|default(false) %}
+{% set saveIntegrationAction = settingsMode ? 'burrow/settings/save-integration-settings' : 'burrow/settings/save-integration-step' %}
+{% set submitLabel = settingsMode ? 'Save & Sync to Burrow'|t('burrow') : ('Continue to ' ~ (stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step')))|t('burrow') %}
+            {% set commerceConfig = integrationStepData.settings.commerce ?? {} %}
+            {% set commerceIcon = availableIntegrations.commerce.iconDataUri ?? '' %}
+            <p class="burrow-muted">Configure how Craft Commerce order lifecycle and funnel activity should be sent to Burrow.</p>
+            <form method="post" action="{{ actionUrl(saveIntegrationAction) }}">
+                {{ csrfInput() }}
+                <input type="hidden" name="integration" value="commerce">
+                <div class="burrow-commerce-panel">
+                    <div class="burrow-commerce-header">
+                        {% if commerceIcon %}
+                            <img class="burrow-commerce-icon" src="{{ commerceIcon }}" alt="" aria-hidden="true">
+                        {% else %}
+                            <span class="burrow-integration-icon-wrap"><span class="burrow-integration-fallback">C</span></span>
+                        {% endif %}
+                        <strong>Craft Commerce</strong>
+                    </div>
+                    <p class="burrow-muted">Core events include order placed and item purchased. Funnel events are optional.</p>
+
+                    {% set commerceMode = commerceConfig.mode ?? 'track' %}
+                    <div class="burrow-commerce-mode-grid">
+                        <div class="burrow-commerce-mode-card {{ commerceMode == 'track' ? 'is-selected' : '' }}">
+                            <label>
+                                {{ forms.radio({
+                                    class: 'burrow-commerce-mode-radio',
+                                    name: 'commerceMode',
+                                    value: 'track',
+                                    checked: commerceMode == 'track',
+                                    label: 'Track events'
+                                }) }}
+                                <span class="hint">Enable Commerce event publishing to Burrow.</span>
+                            </label>
+                        </div>
+                        <div class="burrow-commerce-mode-card {{ commerceMode == 'off' ? 'is-selected' : '' }}">
+                            <label>
+                                {{ forms.radio({
+                                    class: 'burrow-commerce-mode-radio',
+                                    name: 'commerceMode',
+                                    value: 'off',
+                                    checked: commerceMode == 'off',
+                                    label: 'Turn off tracking'
+                                }) }}
+                                <span class="hint">Pause Commerce event publishing for this site.</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="burrow-commerce-funnel {{ commerceMode == 'off' ? 'is-disabled' : '' }}">
+                        <label>
+                            <input class="burrow-commerce-funnel-checkbox" type="checkbox" name="ecommerceFunnel" value="1" {{ (commerceConfig.ecommerceFunnel ?? false) ? 'checked' : '' }} {{ commerceMode == 'off' ? 'disabled' : '' }}>
+                            Enable cart & checkout funnel events
+                        </label>
+                        <ul class="burrow-commerce-event-list burrow-muted">
+                            <li><code>ecommerce.cart.added</code></li>
+                            <li><code>ecommerce.checkout.started</code></li>
+                            <li><code>ecommerce.checkout.abandoned</code></li>
+                            <li><code>ecommerce.cart.recovered</code></li>
+                        </ul>
+                    </div>
+
+                    {% set commerceStatuses = integrationStepData.commerceOrderStatuses ?? [] %}
+                    {% if commerceStatuses|length %}
+                        {% set savedMap = commerceConfig.orderStatusMap ?? {} %}
+                        <div class="burrow-commerce-status-map {{ commerceMode == 'off' ? 'is-disabled' : '' }}">
+                            <h4 style="margin: 0 0 4px;">Order status mapping</h4>
+                            <p class="burrow-muted" style="margin: 0 0 12px;">Map your Commerce order statuses to lifecycle events so Burrow can track fulfillment, refunds, and cancellations. Statuses not mapped here are treated as active orders.</p>
+                            {% set lifecycleGroups = [
+                                { key: 'fulfilled', label: 'Fulfilled / Shipped', event: 'ecommerce.order.fulfilled', hint: 'Statuses that mean an order has been shipped or fulfilled.' },
+                                { key: 'refunded', label: 'Refunded', event: 'ecommerce.order.refunded', hint: 'Statuses that mean an order has been refunded.' },
+                                { key: 'cancelled', label: 'Cancelled', event: 'ecommerce.order.cancelled', hint: 'Statuses that mean an order has been cancelled.' },
+                            ] %}
+                            {% for group in lifecycleGroups %}
+                                {% set selectedHandles = savedMap[group.key] ?? [] %}
+                                <div class="burrow-status-map-group">
+                                    <div class="burrow-status-map-label">
+                                        <strong>{{ group.label }}</strong>
+                                        <code class="burrow-muted">{{ group.event }}</code>
+                                    </div>
+                                    <p class="burrow-muted burrow-status-map-hint">{{ group.hint }}</p>
+                                    <div class="burrow-status-map-checkboxes">
+                                        {% for status in commerceStatuses %}
+                                            <label class="burrow-status-checkbox">
+                                                <input type="checkbox"
+                                                       name="orderStatusMap_{{ group.key }}[]"
+                                                       value="{{ status.handle }}"
+                                                       {{ status.handle in selectedHandles ? 'checked' : '' }}
+                                                       {{ commerceMode == 'off' ? 'disabled' : '' }}>
+                                                {% if status.color %}
+                                                    <span class="burrow-status-dot" style="background: {{ status.color }};"></span>
+                                                {% endif %}
+                                                {{ status.name }}
+                                            </label>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                <div style="margin-top: 16px;">
+                    <button class="btn submit">{{ submitLabel }}</button>
+                </div>
+            </form>
+            <script>
+                (() => {
+                    const modeInputs = Array.from(document.querySelectorAll('.burrow-commerce-mode-radio'));
+                    const funnelWrap = document.querySelector('.burrow-commerce-funnel');
+                    const funnelBox = document.querySelector('.burrow-commerce-funnel-checkbox');
+                    const modeCards = Array.from(document.querySelectorAll('.burrow-commerce-mode-card'));
+                    const statusMapWrap = document.querySelector('.burrow-commerce-status-map');
+                    const statusMapBoxes = Array.from(document.querySelectorAll('.burrow-status-map-checkboxes input[type="checkbox"]'));
+                    if (!modeInputs.length || !funnelWrap || !funnelBox) {
+                        return;
+                    }
+                    const currentMode = () => {
+                        const checked = modeInputs.find((input) => input.checked);
+                        return checked ? checked.value : 'track';
+                    };
+                    const sync = () => {
+                        const mode = currentMode();
+                        modeCards.forEach((card) => {
+                            const input = card.querySelector('.burrow-commerce-mode-radio');
+                            card.classList.toggle('is-selected', !!input && input.checked);
+                        });
+                        const enabled = mode !== 'off';
+                        funnelWrap.classList.toggle('is-disabled', !enabled);
+                        if (statusMapWrap) {
+                            statusMapWrap.classList.toggle('is-disabled', !enabled);
+                        }
+                        if (!enabled) {
+                            funnelBox.checked = false;
+                            funnelBox.setAttribute('disabled', 'disabled');
+                            statusMapBoxes.forEach((cb) => cb.setAttribute('disabled', 'disabled'));
+                        } else {
+                            funnelBox.removeAttribute('disabled');
+                            statusMapBoxes.forEach((cb) => cb.removeAttribute('disabled'));
+                        }
+                    };
+                    modeInputs.forEach((input) => input.addEventListener('change', sync));
+                    sync();
+                })();
+            </script>

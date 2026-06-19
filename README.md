@@ -33,31 +33,32 @@ No webhook configurations in form plugins. No CSV imports. One plugin, total vis
 
 ## Control Panel Flow
 
-The plugin setup is implemented as a 5-step wizard:
+### Initial setup (`Setup`)
 
-1. **Connection**
-   - Save Burrow `baseUrl` and `apiKey`
-   - Run SDK discovery to load available projects
-2. **Project**
-   - Select the Burrow project/client to link
-   - Persist routing metadata, ingestion key, project metadata, and SDK state
-3. **Integrations**
-   - Choose supported integrations
-   - Generate capabilities from enabled providers
-   - Configure provider-specific settings
-4. **Review**
-   - Review integration summary and contracts
-   - Refresh the current system snapshot
-   - Sync form contracts to Burrow
-5. **Finish**
-   - Mark onboarding complete
-   - Publish the latest system snapshot
+First-time connection uses a step-by-step wizard at **Burrow → Setup** (`burrow/setup`):
 
-After onboarding, the plugin exposes:
+1. **Connection** — Save Burrow `baseUrl` and `apiKey`, run SDK discovery
+2. **Project** — Select the Burrow project/client to link; persist routing metadata and ingestion key
+3. **Integrations** — Choose supported integrations and configure provider-specific settings
+4. **Review** — Review contracts and sync to Burrow (including Commerce-only installs)
+5. **Finish** — Mark onboarding complete
 
-- `Dashboard`: linked project, integrations, contract sync state, snapshot status, logs, and backfill controls
-- `Outbox`: recent queue records with retry/delete actions
-- `Setup`: the onboarding wizard for later updates
+### After onboarding (`Settings`)
+
+Once connected, **Burrow → Settings** (`burrow/settings`) provides ongoing configuration without repeating the wizard:
+
+- **Overview** — Linked project, last sync metadata, active contracts, manual sync
+- **Integrations** — Enable or disable providers (auto-syncs capabilities to Burrow)
+- **Freeform / Formie / Commerce** — Edit tracking modes, field mappings, and funnel options (auto-syncs on save)
+- **Connection** — View connection details; re-link via the setup wizard when needed
+
+Changes saved in Settings are pushed to Burrow automatically (contracts, capability re-link when needed, and system snapshot).
+
+### Operations
+
+- **Dashboard** — Linked project summary, contract sync state, backfill, and outbox retention
+- **Outbox** — Recent queue records with retry/delete actions
+- **Setup** — Available again from the Connection section or before onboarding completes
 
 ## Integrations
 

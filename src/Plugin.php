@@ -2,6 +2,7 @@
 namespace burrow\Burrow;
 
 use Craft;
+use craft\helpers\App;
 use yii\base\Event;
 
 use burrow\Burrow\base\PluginTrait;
@@ -54,11 +55,16 @@ class Plugin extends CraftPlugin
     }
 
     /**
-     * Resolves API base URL from DB-backed runtime state first, then project config plugin settings.
+     * Resolves API base URL from `BURROW_BASE_URL` env first, then DB-backed runtime state, then project config plugin settings.
      * Use this (not raw {@see getSettings()}) so production saves work when `allowAdminChanges` is false.
      */
     public function getBurrowBaseUrl(): string
     {
+        $fromEnv = trim((string)App::env('BURROW_BASE_URL'));
+        if ($fromEnv !== '') {
+            return $fromEnv;
+        }
+
         $state = $this->getState()->getState();
         $fromState = trim((string)($state['connectionBaseUrl'] ?? ''));
         if ($fromState !== '') {
@@ -94,13 +100,36 @@ class Plugin extends CraftPlugin
      */
     public function runtimeStateHasIngestionKey(?array $state = null): bool
     {
+        return $this->resolveIngestionKey($state)['key'] !== '';
+    }
+
+    /**
+     * Resolves the project ingestion key from runtime state and SDK state.
+     *
+     * @param array<string,mixed>|null $state
+     * @return array{key:string,projectId:string,keyPrefix:string}
+     */
+    public function resolveIngestionKey(?array $state = null): array
+    {
         $state ??= $this->getState()->getState();
-        $key = '';
-        if (is_array($state['ingestionKey'] ?? null)) {
-            $key = trim((string)($state['ingestionKey']['key'] ?? ''));
+        $stored = is_array($state['ingestionKey'] ?? null) ? $state['ingestionKey'] : [];
+        $key = trim((string)($stored['key'] ?? ''));
+        $projectId = trim((string)($stored['projectId'] ?? ''));
+        $keyPrefix = trim((string)($stored['keyPrefix'] ?? ''));
+
+        if ($key === '' && is_array($state['sdkState'] ?? null)) {
+            $key = trim((string)($state['sdkState']['ingestionKey'] ?? ''));
         }
 
-        return $key !== '';
+        if ($projectId === '') {
+            $projectId = trim((string)($state['projectId'] ?? ''));
+        }
+
+        return [
+            'key' => $key,
+            'projectId' => $projectId,
+            'keyPrefix' => $keyPrefix,
+        ];
     }
 
     /**
@@ -153,7 +182,17 @@ class Plugin extends CraftPlugin
 
     public function getSettingsResponse(): mixed
     {
-        return Craft::$app->getResponse()->redirect(UrlHelper::cpUrl('burrow/settings'));
+        $state = $this->getState()->getState();
+        $url = !empty($state['onboardingCompleted']) ? 'burrow/settings' : 'burrow/setup';
+
+        return Craft::$app->getResponse()->redirect(UrlHelper::cpUrl($url));
+    }
+
+    public function isOnboardingCompleted(): bool
+    {
+        $state = $this->getState()->getState();
+
+        return !empty($state['onboardingCompleted']);
     }
 
     public function getCpNavItem(): ?array
@@ -167,10 +206,17 @@ class Plugin extends CraftPlugin
             'label' => Craft::t('burrow', 'Dashboard'),
             'url' => 'burrow/dashboard',
         ];
-        $item['subnav']['settings'] = [
-            'label' => Craft::t('burrow', 'Setup'),
-            'url' => 'burrow/settings',
-        ];
+        if ($this->isOnboardingCompleted()) {
+            $item['subnav']['settings'] = [
+                'label' => Craft::t('burrow', 'Settings'),
+                'url' => 'burrow/settings',
+            ];
+        } else {
+            $item['subnav']['setup'] = [
+                'label' => Craft::t('burrow', 'Setup'),
+                'url' => 'burrow/setup',
+            ];
+        }
         $item['subnav']['outbox'] = [
             'label' => Craft::t('burrow', 'Outbox'),
             'url' => 'burrow/outbox',
@@ -188,11 +234,13 @@ class Plugin extends CraftPlugin
                 $event->rules = array_merge($event->rules, [
                     'burrow' => 'burrow/settings/dashboard',
                     'burrow/dashboard' => 'burrow/settings/dashboard',
+                    'burrow/setup' => 'burrow/settings/setup',
                     'burrow/backfill-probe' => 'burrow/settings/backfill-probe',
                     'burrow/outbox' => 'burrow/settings/outbox',
                     'burrow/outbox/<elementId:\d+>' => 'elements/edit',
                     'burrow/settings/outbox' => 'burrow/settings/outbox',
-                    'burrow/settings' => 'burrow/settings/index',
+                    'burrow/settings' => 'burrow/settings/configure',
+                    'burrow/settings/index' => 'burrow/settings/index',
                 ]);
             }
         );
@@ -255,7 +303,8 @@ class Plugin extends CraftPlugin
         }
 
         $session->remove('burrow.postInstallRedirectPending');
-        Craft::$app->getResponse()->redirect(UrlHelper::cpUrl('burrow'));
+        $redirectUrl = $this->isOnboardingCompleted() ? 'burrow/dashboard' : 'burrow/setup';
+        Craft::$app->getResponse()->redirect(UrlHelper::cpUrl($redirectUrl));
         Craft::$app->end();
     }
 
@@ -421,7 +470,14 @@ class Plugin extends CraftPlugin
             $snapshotInterval = 7 * 24 * 3600;
             $snapshotLastRun = $this->_timestampFromState((string)($systemJobs['snapshotLastRunAt'] ?? ''));
             $snapshotQueued = $this->_timestampFromState((string)($systemJobs['snapshotQueuedAt'] ?? ''));
-            if (($snapshotLastRun === 0 || ($now - $snapshotLastRun) >= $snapshotInterval) && ($snapshotQueued === 0 || ($now - $snapshotQueued) > 1800)) {
+            $relinkInProgress = trim((string)($runtimeState['connectionApiKey'] ?? '')) !== '';
+            $snapshotPublishedRecently = $this->getSnapshot()->wasPublishedRecently($runtimeState);
+            if (
+                !$relinkInProgress
+                && !$snapshotPublishedRecently
+                && ($snapshotLastRun === 0 || ($now - $snapshotLastRun) >= $snapshotInterval)
+                && ($snapshotQueued === 0 || ($now - $snapshotQueued) > 1800)
+            ) {
                 Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\PublishSystemSnapshotJob());
                 $systemJobs['snapshotQueuedAt'] = gmdate('c');
             }

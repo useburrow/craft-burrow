@@ -4,6 +4,23 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.17] - 2026-06-19
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Changed
+
+- **Form integrations:** Freeform and Formie tracking/backfill now run through a shared adapter registry so new form providers can be added without duplicating submission and backfill logic.
+- **Post-onboarding Settings:** after setup completes, **Burrow → Settings** replaces the wizard for ongoing configuration (Overview, Integrations, provider sections, and Connection) with automatic contract/capability sync on save.
+- **Outbox retry UX:** failed records can be retried in bulk from the dashboard and the Outbox **Failed** source footer (alongside Edit/Export), and individually from the record sheet footer via Craft’s `getAdditionalButtons()` pattern.
+- **SDK dependency:** bumped `useburrow/sdk-php` to **v0.9.9** for reserved canonical key handling and aligned forms contract/submission sanitization with Burrow’s `feed_` prefix rules.
+- **Connection resolution:** `BURROW_BASE_URL` env override is supported; ingestion keys resolve from runtime state or SDK state via `Plugin::resolveIngestionKey()`.
+- **Snapshot scheduling:** skips redundant publishes while a relink/bootstrap is in progress or a snapshot was sent within the recent publish window.
+
+### Fixed
+
+- **Outbox bulk retry:** added `QueueService::retryAllFailed()` and CP actions to reset failed rows and queue immediate delivery without selecting each record manually.
+
 ## [5.3.16] - 2026-06-18
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

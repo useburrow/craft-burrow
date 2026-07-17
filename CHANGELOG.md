@@ -4,6 +4,14 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.18] - 2026-07-17
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Project setup select:** Craft’s CP `customSelect` was coercing JSON option values into objects and posting `[object Object]`, so **Link Project** always redirected back to the project step. Option values are now plain project IDs, with org/client resolved from the discovered-projects session.
+
 ## [5.3.17] - 2026-06-19
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

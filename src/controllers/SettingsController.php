@@ -670,15 +670,25 @@ class SettingsController extends Controller
         $plugin = Plugin::getInstance();
         $runtimeState = $plugin->getState()->getState();
 
-        $rawSelection = (string)$request->getBodyParam('projectSelection', '');
+        // customSelect coerces JSON option values to objects and posts "[object Object]".
+        // Accept a plain projectId (preferred) or legacy JSON, then hydrate from session.
+        $rawSelection = trim((string)$request->getBodyParam('projectSelection', ''));
         $decoded = json_decode($rawSelection, true);
-        $selection = [
-            'organizationId' => trim((string)($decoded['organizationId'] ?? '')),
-            'clientId' => trim((string)($decoded['clientId'] ?? '')),
-            'projectId' => trim((string)($decoded['projectId'] ?? '')),
-        ];
+        if (is_array($decoded)) {
+            $selection = [
+                'organizationId' => trim((string)($decoded['organizationId'] ?? '')),
+                'clientId' => trim((string)($decoded['clientId'] ?? '')),
+                'projectId' => trim((string)($decoded['projectId'] ?? '')),
+            ];
+        } else {
+            $selection = [
+                'organizationId' => '',
+                'clientId' => '',
+                'projectId' => $rawSelection,
+            ];
+        }
         $discoveredProjects = (array)Craft::$app->getSession()->get('burrow.discoveredProjects', []);
-        if ($selection['projectId'] !== '' && ($selection['organizationId'] === '' || $selection['clientId'] === '')) {
+        if ($selection['projectId'] !== '') {
             foreach ($discoveredProjects as $project) {
                 if (!is_array($project)) {
                     continue;

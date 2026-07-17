@@ -168,18 +168,22 @@
                 <p>No discovered projects yet. Run Step 1 first.</p>
             {% else %}
                 {% set selectedProjectId = state.projectId ?? '' %}
-                {% set selectedProjectValue = '' %}
                 {% set projectOptions = [] %}
+                {% set projectDetails = {} %}
                 {% for project in projects %}
                     {% set projectId = project.projectId ?? '' %}
-                    {% set projectValue = project|json_encode %}
-                    {% set projectLabel = (project.projectName ?: project.projectId) ~ ' — ' ~ (project.clientName ?: project.clientId) %}
-                    {% set projectOptions = projectOptions|merge([{
-                        label: projectLabel,
-                        value: projectValue,
-                    }]) %}
-                    {% if projectId == selectedProjectId %}
-                        {% set selectedProjectValue = projectValue %}
+                    {% if projectId %}
+                        {% set projectLabel = (project.projectName ?: project.projectId) ~ ' — ' ~ (project.clientName ?: project.clientId) %}
+                        {% set projectOptions = projectOptions|merge([{
+                            label: projectLabel,
+                            value: projectId,
+                        }]) %}
+                        {% set projectDetails = projectDetails|merge({
+                            (projectId): {
+                                clientName: project.clientName ?? '',
+                                clientId: project.clientId ?? '',
+                            },
+                        }) %}
                     {% endif %}
                 {% endfor %}
                 <form method="post" action="{{ actionUrl('burrow/settings/select-project') }}">
@@ -193,7 +197,7 @@
                             id: 'burrowProjectSelection',
                             name: 'projectSelection',
                             options: projectOptions,
-                            value: selectedProjectValue,
+                            value: selectedProjectId,
                             defaultButtonLabel: 'Select a project…'|t('burrow'),
                         }) }}
                     </div>
@@ -210,28 +214,18 @@
                         const $container = $('#{{ 'burrowProjectSelection'|namespaceInputId }}');
                         const $input = $('#{{ 'burrowProjectSelection-input'|namespaceInputId }}');
                         const $detail = $container.closest('form').find('.burrow-project-detail');
+                        const projectDetails = {{ projectDetails|json_encode|raw }};
                         if (!$container.length || !$input.length || !$detail.length) {
                             return;
                         }
                         const syncDetail = () => {
-                            const value = $input.val();
-                            if (!value) {
+                            const projectId = $input.val();
+                            const meta = projectId ? projectDetails[projectId] : null;
+                            if (!projectId || !meta) {
                                 $detail.prop('hidden', true).text('');
                                 return;
                             }
-                            let parsed;
-                            try {
-                                parsed = JSON.parse(value);
-                            } catch (error) {
-                                $detail.prop('hidden', true).text('');
-                                return;
-                            }
-                            const projectId = parsed.projectId || '';
-                            const clientName = parsed.clientName || parsed.clientId || '';
-                            if (!projectId) {
-                                $detail.prop('hidden', true).text('');
-                                return;
-                            }
+                            const clientName = meta.clientName || meta.clientId || '';
                             $detail.prop('hidden', false).html(
                                 'Client: <strong>' + clientName + '</strong> · Project ID: <code>' + projectId + '</code>'
                             );

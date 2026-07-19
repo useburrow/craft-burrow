@@ -27,6 +27,123 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
     abstract protected function backfillRequiresConfiguredForms(): bool;
 
     /**
+     * @return array<string, array{count: int, lastSubmittedAt: string}>
+     */
+    public function discoverFormActivity(int $windowDays = 120): array
+    {
+        $submissionClass = $this->getSubmissionElementClass();
+        if ($submissionClass === null || !class_exists($submissionClass) || !method_exists($submissionClass, 'find')) {
+            return [];
+        }
+
+        $windowDays = max(1, $windowDays);
+        $windowStartTs = strtotime('-' . $windowDays . ' days') ?: 0;
+        $windowStartDb = gmdate('Y-m-d H:i:s', $windowStartTs);
+
+        $activity = [];
+        foreach ($this->discoverForms() as $form) {
+            if (!is_array($form)) {
+                continue;
+            }
+            $formId = (int)($form['id'] ?? 0);
+            if ($formId <= 0) {
+                continue;
+            }
+            $activity[(string)$formId] = [
+                'count' => $this->countFormSubmissionsSince($submissionClass, $formId, $windowStartDb),
+                'lastSubmittedAt' => $this->latestFormSubmissionAt($submissionClass, $formId),
+            ];
+        }
+
+        return $activity;
+    }
+
+    /**
+     * @param class-string $submissionClass
+     */
+    protected function countFormSubmissionsSince(string $submissionClass, int $formId, string $windowStartDb): int
+    {
+        try {
+            $query = $this->submissionQueryForForm($submissionClass, $formId);
+            if ($query === null) {
+                return 0;
+            }
+            if (method_exists($query, 'dateCreated')) {
+                $query->dateCreated(['and', '>=' . $windowStartDb]);
+            } else {
+                $query->andWhere(['>=', 'elements.dateCreated', $windowStartDb]);
+            }
+
+            return (int)$query->count();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
+     * @param class-string $submissionClass
+     */
+    protected function latestFormSubmissionAt(string $submissionClass, int $formId): string
+    {
+        try {
+            $query = $this->submissionQueryForForm($submissionClass, $formId);
+            if ($query === null) {
+                return '';
+            }
+            $row = $query
+                ->orderBy(['dateCreated' => SORT_DESC])
+                ->limit(1)
+                ->one();
+            if (!is_object($row)) {
+                return '';
+            }
+
+            return $this->normalizeSubmissionTimestamp($this->objectDateValue($row, ['dateCreated', 'dateUpdated']));
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
+    /**
+     * @param class-string $submissionClass
+     * @return mixed|null Element query or null when form scoping is unavailable
+     */
+    protected function submissionQueryForForm(string $submissionClass, int $formId): mixed
+    {
+        if ($formId <= 0 || !method_exists($submissionClass, 'find')) {
+            return null;
+        }
+
+        try {
+            $query = $submissionClass::find()->status(null);
+            if (method_exists($query, 'site')) {
+                try {
+                    $query->site('*');
+                } catch (\Throwable) {
+                }
+            }
+
+            // Formie/Freeform expose formId via real methods or ElementQuery __call criteria.
+            try {
+                $query->formId($formId);
+
+                return $query;
+            } catch (\Throwable) {
+            }
+            try {
+                $query->form($formId);
+
+                return $query;
+            } catch (\Throwable) {
+            }
+
+            return null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
      * @param array<string,mixed> $bodyParams
      * @return array{prefix: string, forms: array<string, array<string, mixed>>}
      */

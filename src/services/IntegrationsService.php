@@ -451,7 +451,10 @@ class IntegrationsService extends Component
 
     /**
      * @param array<string,mixed> $runtimeState
-     * @return array<string, array{forms: array<int, array<string, string>>, fieldsByFormId: array<string, array<int, array<string, string>>>}>
+     * @return array<string, array{
+     *     forms: array<int, array{id: string, name: string, handle: string, submissionCount120d: int, lastSubmittedAt: string, isActive: bool}>,
+     *     fieldsByFormId: array<string, array<int, array<string, string>>>
+     * }>
      */
     public function buildFormAdapterViewData(array $runtimeState): array
     {
@@ -459,19 +462,40 @@ class IntegrationsService extends Component
         foreach ($this->getFormIntegrations()->all() as $adapter) {
             $id = $adapter->getId();
             $forms = $adapter->discoverForms();
+            $activity = $adapter->discoverFormActivity(120);
             $fieldsByFormId = [];
+            $enriched = [];
             foreach ($forms as $form) {
                 $formId = (string)($form['id'] ?? '');
                 if ($formId === '') {
                     continue;
                 }
+                $stats = is_array($activity[$formId] ?? null) ? $activity[$formId] : [];
+                $count = (int)($stats['count'] ?? 0);
+                $lastSubmittedAt = trim((string)($stats['lastSubmittedAt'] ?? ''));
+                $enriched[] = [
+                    'id' => $formId,
+                    'name' => (string)($form['name'] ?? ''),
+                    'handle' => (string)($form['handle'] ?? ''),
+                    'submissionCount120d' => $count,
+                    'lastSubmittedAt' => $lastSubmittedAt,
+                    'isActive' => $count > 0,
+                ];
                 $fieldsByFormId[$formId] = $adapter->discoverFields($formId);
             }
+            usort($enriched, static function (array $a, array $b): int {
+                $countCmp = ($b['submissionCount120d'] ?? 0) <=> ($a['submissionCount120d'] ?? 0);
+                if ($countCmp !== 0) {
+                    return $countCmp;
+                }
+
+                return strcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? ''));
+            });
             $data[$id] = [
                 'id' => $id,
                 'label' => $adapter->getLabel(),
                 'defaultPrefix' => $adapter->getDefaultPrefix(),
-                'forms' => $forms,
+                'forms' => $enriched,
                 'fieldsByFormId' => $fieldsByFormId,
             ];
         }

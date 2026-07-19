@@ -42,6 +42,13 @@ interface FormIntegrationAdapter
     public function discoverForms(): array;
 
     /**
+     * Per-form activity for onboarding UI.
+     *
+     * @return array<string, array{count: int, lastSubmittedAt: string}>
+     */
+    public function discoverFormActivity(int $windowDays = 120): array;
+
+    /**
      * @return array<int, array{externalFieldId: string, sourceLabel: string, dataType: string, canonicalKey: string}>
      */
     public function discoverFields(string $formId): array;

@@ -50,13 +50,29 @@
         .burrow-form-list { max-height: 260px; overflow: auto; border: 1px solid #e3e5e8; border-radius: 4px; padding: 8px 12px; }
         .burrow-form-list label { display: block; margin: 6px 0; }
         #sidebar nav ul li.disabled .disabled-link { display: block; padding: 7px 14px; color: #a4acb6; cursor: not-allowed; }
-        .burrow-form-integration-block { margin: 0 0 24px 0; padding-top: 8px; border-top: 1px solid #e5e8ec; }
-        .burrow-form-integration-block:first-of-type { border-top: 0; padding-top: 0; }
-        .burrow-form-integration-block h3 { font-size: 18px; line-height: 1.3; margin: 0 0 10px 0; font-weight: 700; }
+        .burrow-form-section-title { font-size: 16px; font-weight: 700; margin: 20px 0 4px; }
+        .burrow-form-section-hint { margin: 0 0 10px; font-size: 12px; }
+        .burrow-form-selected-section { margin-top: 8px; }
+        .burrow-form-picker-section { margin-top: 20px; padding-top: 4px; }
+        .burrow-form-picker-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 720px; }
+        .burrow-form-picker-select-wrap { flex: 1 1 320px; min-width: 240px; }
+        .burrow-form-picker-select-wrap select { width: 100%; }
+        .burrow-form-integration-block { margin: 0 0 16px 0; padding: 14px; border: 1px solid #e5e8ec; border-radius: 8px; background: #fff; }
+        .burrow-form-integration-block.is-unselected { display: none; }
+        .burrow-form-integration-block h3 { font-size: 16px; line-height: 1.3; margin: 0 0 4px 0; font-weight: 700; }
+        .burrow-form-block-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+        .burrow-form-meta { margin: 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .burrow-form-mode-fieldset { margin: 0 0 10px 0; border: 0; padding: 0; }
+        .burrow-form-mode-option { margin-right: 14px; display: inline-block; }
         .burrow-field-mapping-table-wrap { margin-top: 8px; }
         .burrow-field-mapping-table-wrap tr.is-disabled td { opacity: 0.5; }
         .burrow-review-table { margin-top: 8px; }
         .burrow-review-actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+        .burrow-finish-backfill { margin-top: 8px; max-width: 720px; }
+        .burrow-finish-backfill-form { margin-top: 12px; }
+        .burrow-finish-backfill-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .burrow-finish-actions { margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .burrow-finish-actions form { display: inline; margin: 0; }
         .burrow-setup-icon { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; margin-bottom: 4px; }
         .burrow-setup-icon .burrow-icon-dot { width: 16px; height: 16px; border-radius: 50%; background: #0d66d0; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
         .burrow-setup-icon .burrow-menu-glyph { width: 16px; height: 16px; object-fit: contain; }
@@ -102,10 +118,13 @@
         .burrow-status-map-checkboxes { display: flex; flex-wrap: wrap; gap: 6px 14px; }
         .burrow-status-checkbox { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
         .burrow-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-        .burrow-review-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 12px 0 6px; }
-        .burrow-review-kpi { border: 1px solid #e3e5e8; border-radius: 8px; background: #fff; padding: 10px 12px; }
+        .burrow-review-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 6px; }
+        .burrow-review-kpi { border: 1px solid #e3e5e8; border-radius: 8px; background: #fff; padding: 10px 12px; min-width: 0; }
         .burrow-review-kpi .label { display: block; font-size: 12px; color: #667085; }
         .burrow-review-kpi .value { display: block; margin-top: 2px; font-size: 20px; font-weight: 700; color: #111927; }
+        @media (max-width: 720px) {
+            .burrow-review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
         .burrow-review-panel { border: 1px solid #e3e5e8; border-radius: 8px; background: #fff; padding: 12px; margin-top: 12px; }
         .burrow-review-table { margin-top: 8px; }
         .burrow-status-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
@@ -265,12 +284,12 @@
         {% elseif step == 'review' %}
             {% set contractCount = contractRows|length %}
             {% set integrationCount = integrationReadinessRows|length %}
-            {% set readinessReadyCount = 0 %}
+            {% set configuredCount = 0 %}
             {% set mappedFieldTotal = 0 %}
             {% for row in integrationReadinessRows %}
                 {% set normalizedStatus = (row.status ?? '')|lower %}
-                {% if 'ready' in normalizedStatus %}
-                    {% set readinessReadyCount = readinessReadyCount + 1 %}
+                {% if 'configured' in normalizedStatus or 'ready' in normalizedStatus %}
+                    {% set configuredCount = configuredCount + 1 %}
                 {% endif %}
             {% endfor %}
             {% for row in contractRows %}
@@ -283,8 +302,8 @@
                     <span class="value">{{ integrationCount }}</span>
                 </div>
                 <div class="burrow-review-kpi">
-                    <span class="label">Ready</span>
-                    <span class="value">{{ readinessReadyCount }}</span>
+                    <span class="label">Configured</span>
+                    <span class="value">{{ configuredCount }}</span>
                 </div>
                 <div class="burrow-review-kpi">
                     <span class="label">Contracts to sync</span>
@@ -312,7 +331,7 @@
                         {% for row in integrationReadinessRows %}
                             {% set normalizedStatus = (row.status ?? '')|lower %}
                             {% set chipClass = 'burrow-status-chip-attention' %}
-                            {% if 'ready' in normalizedStatus %}
+                            {% if 'configured' in normalizedStatus or 'ready' in normalizedStatus %}
                                 {% set chipClass = 'burrow-status-chip-ready' %}
                             {% elseif 'off' in normalizedStatus %}
                                 {% set chipClass = 'burrow-status-chip-off' %}
@@ -373,6 +392,11 @@
             </div>
 
         {% elseif step == 'finish' %}
+            {% set selectedIntegrations = state.selectedIntegrations ?? [] %}
+            {% set hasCommerceIntegration = 'commerce' in selectedIntegrations %}
+            {% set hasFormsIntegration = 'formie' in selectedIntegrations or 'freeform' in selectedIntegrations %}
+            {% set hasFormsBackfill = 'forms' in availableBackfillSources %}
+            {% set hasEcommerceBackfill = 'ecommerce' in availableBackfillSources %}
             <table class="data fullwidth" style="max-width:960px;">
                 <tbody>
                 <tr>
@@ -417,65 +441,110 @@
                 </tbody>
             </table>
 
-            <h2 style="margin-top:24px;">Active Contracts</h2>
-            <table class="data fullwidth" style="max-width:900px;">
-                <thead>
-                <tr>
-                    <th>Provider</th>
-                    <th>Form</th>
-                    <th>Form ID</th>
-                    <th>Mode</th>
-                    <th>Mapped Fields</th>
-                </tr>
-                </thead>
-                <tbody>
-                {% if contractRows is empty %}
-                    <tr><td colspan="5">No active contracts.</td></tr>
-                {% else %}
-                    {% for row in contractRows %}
-                        <tr>
-                            <td>{{ row.provider }}</td>
-                            <td>{{ row.formName ?: '-' }}</td>
-                            <td>{{ row.externalFormId ?: '-' }}</td>
-                            <td>{{ row.mode }}</td>
-                            <td>{{ row.mappingCount }}</td>
-                        </tr>
-                    {% endfor %}
-                {% endif %}
-                </tbody>
-            </table>
-
-            <h2 style="margin-top:24px;">Craft Commerce</h2>
-            {% set commerceConfig = state.integrationSettings.commerce ?? {} %}
-            {% if 'commerce' in state.selectedIntegrations and (commerceConfig.mode ?? 'track') == 'track' %}
-                <p>Tracking <code>ecommerce.order.placed</code> and <code>ecommerce.item.purchased</code> events for all Craft Commerce orders.</p>
-            {% else %}
-                <p class="burrow-muted">Commerce tracking is currently off.</p>
+            {% if hasFormsIntegration %}
+                <h2 style="margin-top:24px;">Active Contracts</h2>
+                <table class="data fullwidth" style="max-width:900px;">
+                    <thead>
+                    <tr>
+                        <th>Provider</th>
+                        <th>Form</th>
+                        <th>Form ID</th>
+                        <th>Mode</th>
+                        <th>Mapped Fields</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% if contractRows is empty %}
+                        <tr><td colspan="5">No active contracts.</td></tr>
+                    {% else %}
+                        {% for row in contractRows %}
+                            <tr>
+                                <td>{{ row.provider }}</td>
+                                <td>{{ row.formName ?: '-' }}</td>
+                                <td>{{ row.externalFormId ?: '-' }}</td>
+                                <td>{{ row.mode }}</td>
+                                <td>{{ row.mappingCount }}</td>
+                            </tr>
+                        {% endfor %}
+                    {% endif %}
+                    </tbody>
+                </table>
             {% endif %}
 
-            <h2 style="margin-top:24px;">Data Backfill</h2>
-            {% set backfillMeta = state.integrationSettings.backfill ?? {} %}
-            {% set backfillStatus = backfillMeta.status ?? '' %}
-            <p class="burrow-muted">
-                {% if backfillStatus == 'completed' %}
-                    Last backfill completed: {{ backfillMeta.accepted ?? 0 }} accepted, {{ backfillMeta.rejected ?? 0 }} rejected.
-                {% elseif backfillStatus == 'failed' %}
-                    Last backfill failed. Open Dashboard to review and retry.
-                {% elseif backfillStatus == 'running' %}
-                    A backfill is running in the queue. Open Dashboard for live counts.
-                {% elseif backfillStatus == 'queued' %}
-                    A backfill is queued; ensure the queue worker is running.
+            {% if hasCommerceIntegration %}
+                <h2 style="margin-top:24px;">Craft Commerce</h2>
+                {% set commerceConfig = state.integrationSettings.commerce ?? {} %}
+                {% if (commerceConfig.mode ?? 'track') == 'track' %}
+                    <p>Tracking <code>ecommerce.order.placed</code> and <code>ecommerce.item.purchased</code> events for all Craft Commerce orders.</p>
                 {% else %}
-                    Next step: run your first backfill in Dashboard to import historical forms and Craft Commerce orders.
+                    <p class="burrow-muted">Commerce tracking is currently off.</p>
                 {% endif %}
-            </p>
-            <p>
-                <a class="btn" href="{{ cpUrl('burrow/dashboard') }}#data-backfill">Run Backfill in Dashboard</a>
-            </p>
-            <p style="margin-top:20px;">
-                <a class="btn submit" href="{{ cpUrl('burrow/dashboard') }}">Go to Dashboard</a>
-                <a class="btn" href="{{ cpUrl('burrow/setup', { step: 'connection', relink: '1' }) }}" style="margin-left:6px;">Reconfigure</a>
-            </p>
+            {% endif %}
+
+            <div class="burrow-finish-backfill">
+                <h2 style="margin-top:24px;">{{ 'Import historical data'|t('burrow') }}</h2>
+                {% set backfillStatus = backfillState.status ?? '' %}
+                <p class="burrow-muted" style="max-width:720px;">
+                    {% if hasFormsBackfill and hasEcommerceBackfill %}
+                        {{ 'Contracts are synced. Run a backfill to import historical form submissions and Craft Commerce orders into Burrow, or finish setup and backfill later from the dashboard.'|t('burrow') }}
+                    {% elseif hasFormsBackfill %}
+                        {{ 'Contracts are synced. Run a backfill to import historical form submissions into Burrow, or finish setup and backfill later from the dashboard.'|t('burrow') }}
+                    {% elseif hasEcommerceBackfill %}
+                        {{ 'Contracts are synced. Run a backfill to import historical Craft Commerce orders into Burrow, or finish setup and backfill later from the dashboard.'|t('burrow') }}
+                    {% else %}
+                        {{ 'Contracts are synced. You can finish setup now and run a backfill later from the dashboard when eligible data sources are available.'|t('burrow') }}
+                    {% endif %}
+                </p>
+
+                {% if backfillStatus == 'queued' or backfillStatus == 'running' %}
+                    <p class="burrow-muted">
+                        {{ 'A backfill is already {status}. Open the dashboard for progress.'|t('burrow', { status: backfillStatus }) }}
+                    </p>
+                    <div class="burrow-finish-actions">
+                        <a class="btn submit" href="{{ cpUrl('burrow/dashboard') }}#data-backfill">{{ 'Go to Dashboard'|t('burrow') }}</a>
+                        <form method="post" action="{{ actionUrl('burrow/settings/finish') }}">
+                            {{ csrfInput() }}
+                            <button type="submit" class="btn">{{ 'Finish setup'|t('burrow') }}</button>
+                        </form>
+                    </div>
+                {% elseif availableBackfillSources is empty %}
+                    <p class="burrow-muted">{{ 'No eligible integrations are configured for backfill yet. You can finish setup and start a backfill later from the dashboard.'|t('burrow') }}</p>
+                    <div class="burrow-finish-actions">
+                        <form method="post" action="{{ actionUrl('burrow/settings/finish') }}">
+                            {{ csrfInput() }}
+                            <button type="submit" class="btn submit">{{ 'Finish setup'|t('burrow') }}</button>
+                        </form>
+                    </div>
+                {% else %}
+                    <form method="post" action="{{ actionUrl('burrow/settings/start-backfill') }}" class="burrow-finish-backfill-form" id="burrow-finish-start-backfill">
+                        {{ csrfInput() }}
+                        <input type="hidden" name="fromSetup" value="1">
+                        <div class="burrow-finish-backfill-controls">
+                            <div class="select">
+                                <select name="backfillWindowPreset" aria-label="{{ 'Backfill window'|t('burrow') }}">
+                                    {% for preset, label in backfillPresets %}
+                                        <option value="{{ preset }}" {{ preset == (backfillState.windowPreset ?? 'last_730_days') ? 'selected' : '' }}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <span>{{ 'Sources:'|t('burrow') }}</span>
+                            {% for source in availableBackfillSources %}
+                                <label>
+                                    <input type="checkbox" name="backfillSources[]" value="{{ source }}" {{ source in backfillSources ? 'checked' : '' }}>
+                                    {{ source == 'ecommerce' ? 'Craft Commerce'|t('burrow') : 'Forms'|t('burrow') }}
+                                </label>
+                            {% endfor %}
+                        </div>
+                    </form>
+                    <div class="burrow-finish-actions">
+                        <button type="submit" class="btn submit" form="burrow-finish-start-backfill">{{ 'Start Backfill'|t('burrow') }}</button>
+                        <form method="post" action="{{ actionUrl('burrow/settings/finish') }}">
+                            {{ csrfInput() }}
+                            <button type="submit" class="btn">{{ 'Finish without backfill'|t('burrow') }}</button>
+                        </form>
+                    </div>
+                {% endif %}
+            </div>
 
         {% else %}
             <p>Burrow bridge is configured.</p>

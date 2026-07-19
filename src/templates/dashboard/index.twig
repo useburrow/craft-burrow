@@ -170,7 +170,7 @@
                 <div class="select">
                     <select name="backfillWindowPreset">
                         {% for preset, label in backfillPresets %}
-                            <option value="{{ preset }}" {{ preset == (backfillState.windowPreset ?? 'last_30_days') ? 'selected' : '' }}>{{ label }}</option>
+                            <option value="{{ preset }}" {{ preset == (backfillState.windowPreset ?? 'last_730_days') ? 'selected' : '' }}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>

@@ -99,6 +99,10 @@ class SettingsController extends Controller
         }
 
         $shared = $this->buildSharedIntegrationViewData($runtimeState, $availableIntegrations, $selectedIntegrations);
+        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $backfillState = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
+        $availableBackfillSources = $plugin->getBackfill()->availableSources($runtimeState);
+        $backfillSources = array_values(array_filter(array_map('strval', (array)($backfillState['sources'] ?? $availableBackfillSources))));
 
         return array_merge($shared, [
             'settings' => $settings,
@@ -111,6 +115,10 @@ class SettingsController extends Controller
             'selectedSubnavItem' => $relinkMode ? 'settings' : 'setup',
             'settingsMode' => false,
             'relinkMode' => $relinkMode,
+            'backfillState' => $backfillState,
+            'backfillSources' => $backfillSources,
+            'availableBackfillSources' => $availableBackfillSources,
+            'backfillPresets' => $plugin->getBackfill()->presetOptions(),
         ]);
     }
 
@@ -961,7 +969,8 @@ class SettingsController extends Controller
         }
 
         $runtimeState = $syncResult['runtimeState'];
-        $runtimeState['onboardingCompleted'] = true;
+        // Keep setup open so the Finish step can offer backfill before onboarding completes.
+        $runtimeState['onboardingCompleted'] = false;
         $runtimeState['onboardingStep'] = 'finish';
         $plugin->getState()->saveState($runtimeState);
         $plugin->getLogs()->log('info', 'Onboarding sync completed', 'onboarding', 'system', null, [
@@ -1012,7 +1021,8 @@ class SettingsController extends Controller
                 'error' => $syncResult['error'],
             ]));
         }
-        return $this->redirect('burrow/setup?step=finish');
+
+        return $this->redirect('burrow/dashboard');
     }
 
     /**
@@ -1061,13 +1071,16 @@ class SettingsController extends Controller
 
         $plugin = Plugin::getInstance();
         $runtimeState = $plugin->getState()->getState();
+        $request = Craft::$app->getRequest();
+        $fromSetup = $request->getBodyParam('fromSetup') === '1';
+        $errorRedirect = $fromSetup ? 'burrow/setup?step=finish' : 'burrow/dashboard#data-backfill';
+
         if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Project is not linked yet.'));
-            return $this->redirect('burrow/dashboard');
+            return $this->redirect($fromSetup ? 'burrow/setup?step=finish' : 'burrow/dashboard');
         }
 
-        $request = Craft::$app->getRequest();
-        $windowPreset = trim((string)$request->getBodyParam('backfillWindowPreset', 'last_30_days'));
+        $windowPreset = trim((string)$request->getBodyParam('backfillWindowPreset', 'last_730_days'));
         $sources = (array)$request->getBodyParam('backfillSources', []);
 
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
@@ -1075,7 +1088,7 @@ class SettingsController extends Controller
         $existingStatus = (string)($existingBackfill['status'] ?? '');
         if ($existingStatus === 'queued' || $existingStatus === 'running') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'A backfill is already running. Wait for it to finish or check the queue before starting another.'));
-            return $this->redirect('burrow/dashboard#data-backfill');
+            return $this->redirect($errorRedirect);
         }
 
         $checkpoint = $plugin->getBackfill()->createInitialCheckpoint($runtimeState, $windowPreset, $sources);
@@ -1087,7 +1100,7 @@ class SettingsController extends Controller
             } else {
                 Craft::$app->getSession()->setError(Craft::t('burrow', 'No backfill source is available for the selected integrations.'));
             }
-            return $this->redirect('burrow/dashboard#data-backfill');
+            return $this->redirect($errorRedirect);
         }
 
         $integrationSettings['backfill'] = [
@@ -1108,11 +1121,21 @@ class SettingsController extends Controller
             'checkpoint' => $checkpoint,
         ];
         $runtimeState['integrationSettings'] = $integrationSettings;
+        if ($fromSetup) {
+            $runtimeState['onboardingCompleted'] = true;
+            $runtimeState['onboardingStep'] = 'finish';
+        }
         $plugin->getState()->saveState($runtimeState);
 
         Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\BackfillChunkJob());
 
-        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Backfill queued. It will run via Craft’s queue in the background; keep your queue worker running until it finishes. Progress appears on this dashboard.'));
+        if ($fromSetup) {
+            $plugin->getLogs()->log('info', 'Onboarding finished with backfill queued', 'onboarding', 'system');
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Setup complete. Backfill queued — keep your queue worker running; progress appears on the dashboard.'));
+        } else {
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Backfill queued. It will run via Craft’s queue in the background; keep your queue worker running until it finishes. Progress appears on this dashboard.'));
+        }
+
         return $this->redirect('burrow/dashboard#data-backfill');
     }
 }

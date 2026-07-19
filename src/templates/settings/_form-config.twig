@@ -1,16 +1,23 @@
 {% import "_includes/forms" as forms %}
 {% set settingsMode = settingsMode|default(false) %}
 {% set saveIntegrationAction = settingsMode ? 'burrow/settings/save-integration-settings' : 'burrow/settings/save-integration-step' %}
-{% set submitLabel = settingsMode ? 'Save & Sync to Burrow'|t('burrow') : ('Continue to ' ~ (stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step')))|t('burrow') %}
+{% set submitLabel = settingsMode ? 'Save & Sync to Burrow'|t('burrow') : 'Save forms & continue'|t('burrow') %}
 {% set adapterId = formAdapterId %}
 {% set adapterLabel = formAdapterLabel %}
 {% set adapterData = formAdapterData %}
 {% set adapterConfig = integrationStepData.settings[adapterId] ?? {} %}
 {% set savedForms = adapterConfig.forms ?? {} %}
+{% set selectedFormCount = 0 %}
+{% for form in adapterData.forms %}
+    {% set existingMode = (savedForms[form.id].mode ?? 'off') %}
+    {% if existingMode in ['count_only', 'custom_fields'] %}
+        {% set selectedFormCount = selectedFormCount + 1 %}
+    {% endif %}
+{% endfor %}
 <p class="burrow-muted">
-    Count-only sends a minimal envelope (formId, formName, submissionId, timestamp). Custom fields only adds mapped tags/properties — never full submission element data.
+    Add the forms you want to track. Count-only sends a minimal envelope (formId, formName, submissionId, timestamp). Custom fields only adds mapped tags/properties — never full submission element data.
 </p>
-<form method="post" action="{{ actionUrl(saveIntegrationAction) }}">
+<form method="post" action="{{ actionUrl(saveIntegrationAction) }}" class="burrow-form-config-form" data-adapter-id="{{ adapterId }}">
     {{ csrfInput() }}
     <input type="hidden" name="integration" value="{{ adapterId }}">
     {{ forms.textField({
@@ -25,148 +32,350 @@
     {% if adapterData.forms is empty %}
         <p class="burrow-muted">No {{ adapterLabel }} forms were found.</p>
     {% else %}
-        {% for form in adapterData.forms %}
-            {% set formConfig = savedForms[form.id] ?? {} %}
-            {% set formMode = formConfig.mode ?? 'off' %}
-            {% set isCustomMode = formMode == 'custom_fields' %}
-            {% set formFields = adapterData.fieldsByFormId[form.id] ?? [] %}
-            {% set mappedFields = formConfig.fields ?? {} %}
-            <div class="burrow-form-integration-block" data-form-id="{{ form.id }}">
-                <h3>{{ form.name }}</h3>
-                <fieldset style="margin:0 0 10px 0;">
-                    <legend><strong>Tracking mode</strong></legend>
-                    <span style="margin-right:14px;">{{ forms.radio({
-                        class: 'burrow-form-mode-radio',
-                        name: adapterId ~ '[forms][' ~ form.id ~ '][mode]',
-                        value: 'off',
-                        checked: formMode == 'off',
-                        label: 'Off'
-                    }) }}</span>
-                    <span style="margin-right:14px;">{{ forms.radio({
-                        class: 'burrow-form-mode-radio',
-                        name: adapterId ~ '[forms][' ~ form.id ~ '][mode]',
-                        value: 'count_only',
-                        checked: formMode == 'count_only',
-                        label: 'Count-only'
-                    }) }}</span>
-                    <span>{{ forms.radio({
-                        class: 'burrow-form-mode-radio',
-                        name: adapterId ~ '[forms][' ~ form.id ~ '][mode]',
-                        value: 'custom_fields',
-                        checked: formMode == 'custom_fields',
-                        label: 'Custom fields'
-                    }) }}</span>
-                </fieldset>
-                <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][externalFormId]" value="{{ form.id }}">
-                <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][formName]" value="{{ form.name }}">
-                {% if formFields is empty %}
-                    <p class="burrow-muted">No fields detected for this form.</p>
-                {% else %}
-                    <div class="burrow-field-mapping-table-wrap">
-                        <table class="data fullwidth">
-                            <thead>
-                                <tr>
-                                    <th>Include</th>
-                                    <th>Field</th>
-                                    <th>Type</th>
-                                    <th>Canonical Key</th>
-                                    <th>Target</th>
-                                    <th>Display Label</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for field in formFields %}
-                                    {% set fieldConfig = mappedFields[field.externalFieldId] ?? {} %}
-                                    {% set isIncluded = fieldConfig ? true : false %}
-                                    {% set canonicalKey = fieldConfig.canonicalKey ?? field.canonicalKey %}
-                                    {% set target = fieldConfig.target ?? '' %}
-                                    {% set displayLabel = fieldConfig.displayLabelOverride ?? field.sourceLabel %}
-                                    <tr class="{{ isCustomMode ? '' : 'is-disabled' }}">
-                                        <td>
-                                            {{ forms.checkbox({
-                                                id: adapterId ~ '-' ~ form.id ~ '-field-' ~ field.externalFieldId ~ '-include',
-                                                class: 'burrow-form-field-checkbox',
-                                                name: adapterId ~ '[forms][' ~ form.id ~ '][fields][' ~ field.externalFieldId ~ '][include]',
-                                                value: 1,
-                                                checked: isIncluded,
-                                                disabled: (not isCustomMode),
-                                                label: ' '
-                                            }) }}
-                                        </td>
-                                        <td>{{ field.sourceLabel }}</td>
-                                        <td>{{ field.dataType }}</td>
-                                        <td>
-                                            <div class="input ltr">
-                                                <input class="text fullwidth" type="text" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][canonicalKey]" value="{{ canonicalKey }}" {{ not isCustomMode ? 'disabled' : '' }}>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <div class="select">
-                                                <select name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][target]" {{ not isCustomMode ? 'disabled' : '' }}>
-                                                    <option value="">Select one</option>
-                                                    <option value="properties" {{ target == 'properties' ? 'selected' : '' }}>properties</option>
-                                                    <option value="tags" {{ target == 'tags' ? 'selected' : '' }}>tags</option>
-                                                </select>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <div class="input ltr">
-                                                <input class="text fullwidth" type="text" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][displayLabelOverride]" value="{{ displayLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                    <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][externalFieldId]" value="{{ field.externalFieldId }}" {{ not isCustomMode ? 'disabled' : '' }}>
-                                    <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][sourceLabel]" value="{{ field.sourceLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
-                                    <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][dataType]" value="{{ field.dataType }}" {{ not isCustomMode ? 'disabled' : '' }}>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+        <div class="burrow-form-selected-section">
+            <h3 class="burrow-form-section-title">{{ 'Tracking these forms'|t('burrow') }}</h3>
+            <p class="burrow-muted burrow-form-section-hint">{{ 'Choose Count-only or Custom fields for each form you add.'|t('burrow') }}</p>
+            <p class="burrow-muted burrow-form-selected-empty"{% if selectedFormCount > 0 %} hidden{% endif %}>
+                {{ 'No forms added yet. Use Add a form below to get started.'|t('burrow') }}
+            </p>
+            <div class="burrow-form-selected-list">
+                {% for form in adapterData.forms %}
+                    {% set formConfig = savedForms[form.id] ?? {} %}
+                    {% set formMode = formConfig.mode ?? 'off' %}
+                    {% set isSelected = formMode in ['count_only', 'custom_fields'] %}
+                    {% set isCustomMode = formMode == 'custom_fields' %}
+                    {% set formFields = adapterData.fieldsByFormId[form.id] ?? [] %}
+                    {% set mappedFields = formConfig.fields ?? {} %}
+                    {% set lastSubmittedLabel = form.lastSubmittedAt ? form.lastSubmittedAt|date('M j, Y') : 'No submissions'|t('burrow') %}
+                    <div
+                        class="burrow-form-integration-block{% if not isSelected %} is-unselected{% endif %}"
+                        data-form-id="{{ form.id }}"
+                        data-form-name="{{ form.name|e('html_attr') }}"
+                        data-selected="{{ isSelected ? '1' : '0' }}"
+                    >
+                        <div class="burrow-form-block-header">
+                            <div>
+                                <h3>{{ form.name }}</h3>
+                                <p class="burrow-muted burrow-form-meta">
+                                    {% if form.handle %}
+                                        <code>{{ form.handle }}</code>
+                                        <span aria-hidden="true">·</span>
+                                    {% endif %}
+                                    <span>{{ form.submissionCount120d }} {{ 'in last 120 days'|t('burrow') }}</span>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{{ 'Last'|t('burrow') }}: {{ lastSubmittedLabel }}</span>
+                                </p>
+                            </div>
+                            <button type="button" class="btn burrow-form-remove-btn">{{ 'Remove'|t('burrow') }}</button>
+                        </div>
+                        <div class="burrow-form-selected-body">
+                            <fieldset class="burrow-form-mode-fieldset">
+                                <legend><strong>{{ 'Tracking mode'|t('burrow') }}</strong></legend>
+                                <span class="burrow-form-mode-option">{{ forms.radio({
+                                    class: 'burrow-form-mode-radio',
+                                    name: adapterId ~ '[forms][' ~ form.id ~ '][mode]',
+                                    value: 'count_only',
+                                    checked: (not isSelected) or formMode == 'count_only' or formMode == 'off',
+                                    label: 'Count-only'|t('burrow'),
+                                    disabled: not isSelected
+                                }) }}</span>
+                                <span class="burrow-form-mode-option">{{ forms.radio({
+                                    class: 'burrow-form-mode-radio',
+                                    name: adapterId ~ '[forms][' ~ form.id ~ '][mode]',
+                                    value: 'custom_fields',
+                                    checked: isSelected and formMode == 'custom_fields',
+                                    label: 'Custom fields'|t('burrow'),
+                                    disabled: not isSelected
+                                }) }}</span>
+                            </fieldset>
+                            <input type="hidden" class="burrow-form-external-id" name="{{ adapterId }}[forms][{{ form.id }}][externalFormId]" value="{{ form.id }}" {{ not isSelected ? 'disabled' : '' }}>
+                            <input type="hidden" class="burrow-form-name-input" name="{{ adapterId }}[forms][{{ form.id }}][formName]" value="{{ form.name }}" {{ not isSelected ? 'disabled' : '' }}>
+                            {% if formFields is empty %}
+                                <p class="burrow-muted">{{ 'No fields detected for this form.'|t('burrow') }}</p>
+                            {% else %}
+                                <div class="burrow-field-mapping-table-wrap">
+                                    <table class="data fullwidth">
+                                        <thead>
+                                            <tr>
+                                                <th>{{ 'Include'|t('burrow') }}</th>
+                                                <th>{{ 'Field'|t('burrow') }}</th>
+                                                <th>{{ 'Type'|t('burrow') }}</th>
+                                                <th>{{ 'Canonical Key'|t('burrow') }}</th>
+                                                <th>{{ 'Target'|t('burrow') }}</th>
+                                                <th>{{ 'Display Label'|t('burrow') }}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for field in formFields %}
+                                                {% set fieldConfig = mappedFields[field.externalFieldId] ?? {} %}
+                                                {% set isIncluded = fieldConfig ? true : false %}
+                                                {% set canonicalKey = fieldConfig.canonicalKey ?? field.canonicalKey %}
+                                                {% set target = fieldConfig.target ?? '' %}
+                                                {% set displayLabel = fieldConfig.displayLabelOverride ?? field.sourceLabel %}
+                                                <tr class="{{ isCustomMode ? '' : 'is-disabled' }}">
+                                                    <td>
+                                                        {{ forms.checkbox({
+                                                            id: adapterId ~ '-' ~ form.id ~ '-field-' ~ field.externalFieldId ~ '-include',
+                                                            class: 'burrow-form-field-checkbox',
+                                                            name: adapterId ~ '[forms][' ~ form.id ~ '][fields][' ~ field.externalFieldId ~ '][include]',
+                                                            value: 1,
+                                                            checked: isIncluded,
+                                                            disabled: (not isCustomMode),
+                                                            label: ' '
+                                                        }) }}
+                                                    </td>
+                                                    <td>{{ field.sourceLabel }}</td>
+                                                    <td>{{ field.dataType }}</td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][canonicalKey]" value="{{ canonicalKey }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="select">
+                                                            <select name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][target]" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                                <option value="">{{ 'Select one'|t('burrow') }}</option>
+                                                                <option value="properties" {{ target == 'properties' ? 'selected' : '' }}>properties</option>
+                                                                <option value="tags" {{ target == 'tags' ? 'selected' : '' }}>tags</option>
+                                                            </select>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="input ltr">
+                                                            <input class="text fullwidth" type="text" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][displayLabelOverride]" value="{{ displayLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                                <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][externalFieldId]" value="{{ field.externalFieldId }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][sourceLabel]" value="{{ field.sourceLabel }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                                <input type="hidden" name="{{ adapterId }}[forms][{{ form.id }}][fields][{{ field.externalFieldId }}][dataType]" value="{{ field.dataType }}" {{ not isCustomMode ? 'disabled' : '' }}>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {% endif %}
+                        </div>
                     </div>
-                {% endif %}
+                {% endfor %}
             </div>
-        {% endfor %}
+        </div>
+
+        <div class="burrow-form-picker-section">
+            <h3 class="burrow-form-section-title">{{ 'Add a form'|t('burrow') }}</h3>
+            <p class="burrow-muted burrow-form-section-hint">
+                {{ 'Forms are sorted by submissions in the last 120 days. Last submission is all-time.'|t('burrow') }}
+            </p>
+            <div class="burrow-form-picker-row">
+                <div class="select burrow-form-picker-select-wrap">
+                    <select id="{{ adapterId }}-form-picker" class="burrow-form-picker-select" aria-label="{{ 'Select a form to track'|t('burrow') }}">
+                        <option value="">{{ 'Select a form…'|t('burrow') }}</option>
+                        {% for form in adapterData.forms %}
+                            {% set formConfig = savedForms[form.id] ?? {} %}
+                            {% set formMode = formConfig.mode ?? 'off' %}
+                            {% set isSelected = formMode in ['count_only', 'custom_fields'] %}
+                            {% set lastSubmittedLabel = form.lastSubmittedAt ? form.lastSubmittedAt|date('M j, Y') : 'No submissions'|t('burrow') %}
+                            <option
+                                value="{{ form.id }}"
+                                data-form-id="{{ form.id }}"
+                                {% if isSelected %}hidden disabled{% endif %}
+                            >
+                                {{ form.name }} — {{ form.submissionCount120d }} {{ 'in 120d'|t('burrow') }}, {{ 'last'|t('burrow') }} {{ lastSubmittedLabel }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="button" class="btn burrow-form-add-btn">{{ 'Add Form'|t('burrow') }}</button>
+            </div>
+            <p class="burrow-muted burrow-form-picker-empty"{% if selectedFormCount < adapterData.forms|length %} hidden{% endif %}>
+                {{ 'All forms have been added.'|t('burrow') }}
+            </p>
+        </div>
+    {% endif %}
+    <div style="margin-top: 16px;">
+        <button
+            type="submit"
+            class="btn submit burrow-form-submit-btn"
+            {% if not settingsMode and selectedFormCount == 0 and adapterData.forms is not empty %}disabled{% endif %}
+            {% if not settingsMode %}data-require-form="1"{% endif %}
+        >{{ submitLabel }}</button>
+    </div>
+    {% if adapterData.forms is not empty %}
         <script>
             (() => {
-                const forms = Array.from(document.querySelectorAll('.burrow-form-integration-block'));
-                if (!forms.length) return;
-                const parentForm = forms[0].closest('form');
-                forms.forEach((block) => {
+                const scriptEl = document.currentScript;
+                const root = (scriptEl && scriptEl.closest('form'))
+                    || document.querySelector('.burrow-form-config-form[data-adapter-id="{{ adapterId }}"]');
+                if (!root) return;
+
+                const picker = root.querySelector('.burrow-form-picker-select');
+                const addBtn = root.querySelector('.burrow-form-add-btn');
+                const submitBtn = root.querySelector('.burrow-form-submit-btn');
+                const selectedList = root.querySelector('.burrow-form-selected-list');
+                const selectedEmpty = root.querySelector('.burrow-form-selected-empty');
+                const pickerEmpty = root.querySelector('.burrow-form-picker-empty');
+                const pickerRow = root.querySelector('.burrow-form-picker-row');
+                const blocks = Array.from(root.querySelectorAll('.burrow-form-integration-block'));
+
+                const setControlDisabled = (control, disabled) => {
+                    if (!control) return;
+                    if (disabled) {
+                        control.setAttribute('disabled', 'disabled');
+                    } else {
+                        control.removeAttribute('disabled');
+                    }
+                };
+
+                const optionForForm = (formId) => {
+                    if (!picker) return null;
+                    return picker.querySelector('option[data-form-id="' + String(formId) + '"]');
+                };
+
+                const syncBlockMode = (block) => {
+                    const selected = block.dataset.selected === '1';
+                    const modeInputs = Array.from(block.querySelectorAll('.burrow-form-mode-radio'));
+                    const fieldCheckboxes = Array.from(block.querySelectorAll('.burrow-form-field-checkbox'));
+                    const mappingControls = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap input, .burrow-field-mapping-table-wrap select, .burrow-field-mapping-table-wrap textarea'));
+                    const identityInputs = Array.from(block.querySelectorAll('.burrow-form-external-id, .burrow-form-name-input'));
+
+                    modeInputs.forEach((input) => setControlDisabled(input, !selected));
+                    identityInputs.forEach((input) => setControlDisabled(input, !selected));
+
+                    if (!selected) {
+                        modeInputs.forEach((input) => {
+                            input.checked = input.value === 'count_only';
+                        });
+                        fieldCheckboxes.forEach((field) => { field.checked = false; });
+                        mappingControls.forEach((control) => setControlDisabled(control, true));
+                        Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap tbody tr')).forEach((row) => {
+                            row.classList.add('is-disabled');
+                        });
+                        return;
+                    }
+
+                    const picked = modeInputs.find((input) => input.checked);
+                    const mode = picked ? picked.value : 'count_only';
+                    const fieldsEnabled = mode === 'custom_fields';
+                    if (!fieldsEnabled) {
+                        fieldCheckboxes.forEach((field) => { field.checked = false; });
+                    }
+                    Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap tbody tr')).forEach((row) => {
+                        row.classList.toggle('is-disabled', !fieldsEnabled);
+                    });
+                    mappingControls.forEach((control) => setControlDisabled(control, !fieldsEnabled));
+                    block.classList.toggle('burrow-count-only-active', mode === 'count_only');
+                };
+
+                const syncPickerState = () => {
+                    const available = picker
+                        ? Array.from(picker.querySelectorAll('option[data-form-id]')).filter((option) => !option.hidden)
+                        : [];
+                    const selectedCount = blocks.filter((block) => block.dataset.selected === '1').length;
+                    if (selectedEmpty) {
+                        selectedEmpty.hidden = selectedCount > 0;
+                    }
+                    if (pickerEmpty) {
+                        pickerEmpty.hidden = available.length > 0;
+                    }
+                    if (pickerRow) {
+                        pickerRow.hidden = available.length === 0;
+                    }
+                    setControlDisabled(addBtn, available.length === 0);
+                    setControlDisabled(picker, available.length === 0);
+                    if (submitBtn && submitBtn.dataset.requireForm === '1') {
+                        setControlDisabled(submitBtn, selectedCount === 0);
+                    }
+                };
+
+                const setSelected = (formId, selected) => {
+                    const block = blocks.find((item) => item.dataset.formId === String(formId));
+                    const option = optionForForm(formId);
+                    if (!block) return;
+
+                    block.dataset.selected = selected ? '1' : '0';
+                    block.classList.toggle('is-unselected', !selected);
+
+                    if (option) {
+                        option.hidden = selected;
+                        option.disabled = selected;
+                    }
+
+                    if (selected) {
+                        const countOnly = block.querySelector('.burrow-form-mode-radio[value="count_only"]');
+                        if (countOnly) {
+                            countOnly.checked = true;
+                        }
+                        if (selectedList) {
+                            selectedList.appendChild(block);
+                        }
+                        // Keep the bottom picker in context after each add.
+                        const pickerSection = root.querySelector('.burrow-form-picker-section');
+                        if (pickerSection) {
+                            pickerSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                    }
+
+                    if (picker && selected) {
+                        picker.value = '';
+                    }
+
+                    syncBlockMode(block);
+                    syncPickerState();
+                };
+
+                const addFromPicker = () => {
+                    if (!picker) return;
+                    const formId = picker.value;
+                    if (!formId) {
+                        picker.focus();
+                        return;
+                    }
+                    setSelected(formId, true);
+                };
+
+                blocks.forEach((block) => {
                     const modeInputs = Array.from(block.querySelectorAll('.burrow-form-mode-radio'));
                     const fields = Array.from(block.querySelectorAll('.burrow-form-field-checkbox'));
-                    if (!modeInputs.length) return;
-                    const controls = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap input, .burrow-field-mapping-table-wrap select, .burrow-field-mapping-table-wrap textarea'));
-                    const sync = () => {
-                        const picked = modeInputs.find((input) => input.checked);
-                        const mode = picked ? picked.value : 'off';
-                        const fieldsEnabled = mode === 'custom_fields';
-                        if (!fieldsEnabled) {
-                            fields.forEach((field) => { field.checked = false; });
-                        }
-                        const rows = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap tbody tr'));
-                        rows.forEach((row) => row.classList.toggle('is-disabled', !fieldsEnabled));
-                        controls.forEach((control) => {
-                            if (!fieldsEnabled) {
-                                control.setAttribute('disabled', 'disabled');
-                            } else {
-                                control.removeAttribute('disabled');
-                            }
-                        });
-                        block.classList.toggle('burrow-count-only-active', mode === 'count_only');
-                    };
-                    modeInputs.forEach((input) => input.addEventListener('change', sync));
-                    fields.forEach((field) => field.addEventListener('change', sync));
-                    sync();
+                    modeInputs.forEach((input) => input.addEventListener('change', () => syncBlockMode(block)));
+                    fields.forEach((field) => field.addEventListener('change', () => syncBlockMode(block)));
+                    const removeBtn = block.querySelector('.burrow-form-remove-btn');
+                    if (removeBtn) {
+                        removeBtn.addEventListener('click', () => setSelected(block.dataset.formId, false));
+                    }
+                    syncBlockMode(block);
                 });
-                if (!parentForm) return;
-                parentForm.addEventListener('submit', (event) => {
-                    for (const block of forms) {
+
+                // Keep already-selected blocks in a stable stack at the top of the list.
+                if (selectedList) {
+                    blocks
+                        .filter((block) => block.dataset.selected === '1')
+                        .forEach((block) => selectedList.appendChild(block));
+                }
+
+                if (addBtn) {
+                    addBtn.addEventListener('click', addFromPicker);
+                }
+                if (picker) {
+                    picker.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addFromPicker();
+                        }
+                    });
+                }
+
+                syncPickerState();
+
+                root.addEventListener('submit', (event) => {
+                    for (const block of blocks) {
+                        if (block.dataset.selected !== '1') {
+                            continue;
+                        }
                         const selectedMode = block.querySelector('.burrow-form-mode-radio:checked');
-                        const mode = selectedMode ? selectedMode.value : 'off';
+                        const mode = selectedMode ? selectedMode.value : 'count_only';
                         if (mode !== 'custom_fields') {
                             continue;
                         }
-                        const heading = block.querySelector('h3');
-                        const formName = heading && heading.textContent ? heading.textContent.trim() : 'This form';
+                        const formName = block.dataset.formName || 'This form';
                         const includedFields = Array.from(block.querySelectorAll('.burrow-form-field-checkbox:checked'));
                         if (!includedFields.length) {
                             event.preventDefault();
@@ -195,7 +404,4 @@
             })();
         </script>
     {% endif %}
-    <div style="margin-top: 16px;">
-        <button class="btn submit">{{ submitLabel }}</button>
-    </div>
 </form>

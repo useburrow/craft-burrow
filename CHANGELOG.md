@@ -4,6 +4,21 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.3.19] - 2026-07-18
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Changed
+
+- **Form setup:** Formie/Freeform onboarding is now a selective add flow. Forms are chosen from a bottom picker sorted by 120-day submission volume, with all-time last submission dates, then configured as Count-only or Custom fields in stacked cards. **Save forms & continue** stays disabled until at least one form is added.
+- **Review step:** KPI row is a single four-column layout; the former Ready card is now **Configured** and matches integration readiness status.
+- **Finish step:** sections for Active Contracts and Craft Commerce only appear for selected integrations; backfill copy reflects available sources; **Start Backfill** and **Finish without backfill** sit on one row.
+- **Backfill default:** historical import window defaults to **Two years** on Finish and the dashboard.
+
+### Fixed
+
+- **Form setup submit gating:** the continue button now correctly enables after adding a form (script runs after the submit control is in the DOM).
+
 ## [5.3.18] - 2026-07-17
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

@@ -16,6 +16,7 @@
     freeform: 'Freeform setup',
     formie: 'Formie setup',
     commerce: 'Craft Commerce setup',
+    shopify: 'Shopify setup',
     review: 'Review',
     finish: 'Finish'
 } %}
@@ -281,6 +282,9 @@
         {% elseif step == 'commerce' %}
             {% include 'burrow/settings/_commerce-config' with { settingsMode: false } %}
 
+        {% elseif step == 'shopify' %}
+            {% include 'burrow/settings/_shopify-config' with { settingsMode: false } %}
+
         {% elseif step == 'review' %}
             {% set contractCount = contractRows|length %}
             {% set integrationCount = integrationReadinessRows|length %}
@@ -478,6 +482,18 @@
                     <p>Tracking <code>ecommerce.order.placed</code> and <code>ecommerce.item.purchased</code> events for all Craft Commerce orders.</p>
                 {% else %}
                     <p class="burrow-muted">Commerce tracking is currently off.</p>
+                {% endif %}
+            {% endif %}
+
+            {% if 'shopify' in selectedIntegrations %}
+                <h2 style="margin-top:24px;">Shopify (Headless)</h2>
+                {% set shopifyConfig = state.integrationSettings.shopify ?? {} %}
+                {% if (shopifyConfig.mode ?? 'track') == 'track' and (shopifyConfig.ecommerceFunnel ?? false) %}
+                    <p>Capturing <code>ecommerce.cart.added</code> and <code>ecommerce.cart.removed</code> from the storefront{% if shopifyConfig.shopDomain is defined and shopifyConfig.shopDomain %} for <code>{{ shopifyConfig.shopDomain }}</code>{% endif %}. Checkout and order events come from Shopify-side integrations configured in Burrow.</p>
+                {% elseif (shopifyConfig.mode ?? 'track') == 'track' %}
+                    <p class="burrow-muted">Shopify tracking is on, but cart funnel capture is disabled.</p>
+                {% else %}
+                    <p class="burrow-muted">Shopify tracking is currently off.</p>
                 {% endif %}
             {% endif %}
 

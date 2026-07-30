@@ -1,0 +1,112 @@
+{% import "_includes/forms" as forms %}
+{% set settingsMode = settingsMode|default(false) %}
+{% set saveIntegrationAction = settingsMode ? 'burrow/settings/save-integration-settings' : 'burrow/settings/save-integration-step' %}
+{% set submitLabel = settingsMode ? 'Save & Sync to Burrow'|t('burrow') : ('Continue to ' ~ (stepTitles[nextStep] ?? (wizardSteps[nextStep] ?? 'next step')))|t('burrow') %}
+{% set shopifyConfig = integrationStepData.settings.shopify ?? {} %}
+{% set shopifyMeta = integrationStepData.shopify ?? {} %}
+{% set shopifyIcon = availableIntegrations.shopify.iconDataUri ?? '' %}
+{% set detectedShopDomain = shopifyMeta.detectedShopDomain ?? '' %}
+<p class="burrow-muted">Capture the cart stage of your headless Shopify funnel from this Craft frontend. Checkout events come from the Shopify checkout pixel and orders from the Shopify Admin API integration — configure both in Burrow (Integrations &rarr; Shopify) against the same project.</p>
+<form method="post" action="{{ actionUrl(saveIntegrationAction) }}">
+    {{ csrfInput() }}
+    <input type="hidden" name="integration" value="shopify">
+    <div class="burrow-commerce-panel">
+        <div class="burrow-commerce-header">
+            {% if shopifyIcon %}
+                <img class="burrow-commerce-icon" src="{{ shopifyIcon }}" alt="" aria-hidden="true">
+            {% else %}
+                <span class="burrow-integration-icon-wrap"><span class="burrow-integration-fallback">S</span></span>
+            {% endif %}
+            <strong>Shopify (Headless)</strong>
+        </div>
+        <p class="burrow-muted">The plugin injects a small collector script into your site frontend that watches Shopify <code>cart/add</code> form submits and relays them to Burrow through this Craft install. Custom Storefront-API carts can call <code>window.burrow.track()</code> directly.</p>
+        {% if (shopifyMeta.suggested ?? false) and not settingsMode %}
+            <p class="burrow-muted"><strong>{{ 'Detected'|t('burrow') }}:</strong> {{ 'craftcms/shopify is installed without Craft Commerce — this site looks like a headless Shopify build.'|t('burrow') }}</p>
+        {% endif %}
+
+        {% set shopifyMode = shopifyConfig.mode ?? 'track' %}
+        <div class="burrow-commerce-mode-grid">
+            <div class="burrow-shopify-mode-card burrow-commerce-mode-card {{ shopifyMode == 'track' ? 'is-selected' : '' }}">
+                <label>
+                    {{ forms.radio({
+                        class: 'burrow-shopify-mode-radio',
+                        name: 'shopifyMode',
+                        value: 'track',
+                        checked: shopifyMode == 'track',
+                        label: 'Track events'
+                    }) }}
+                    <span class="hint">Enable headless Shopify event publishing to Burrow.</span>
+                </label>
+            </div>
+            <div class="burrow-shopify-mode-card burrow-commerce-mode-card {{ shopifyMode == 'off' ? 'is-selected' : '' }}">
+                <label>
+                    {{ forms.radio({
+                        class: 'burrow-shopify-mode-radio',
+                        name: 'shopifyMode',
+                        value: 'off',
+                        checked: shopifyMode == 'off',
+                        label: 'Turn off tracking'
+                    }) }}
+                    <span class="hint">Pause headless Shopify event publishing for this site.</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="burrow-shopify-funnel burrow-commerce-funnel {{ shopifyMode == 'off' ? 'is-disabled' : '' }}">
+            <label>
+                <input class="burrow-shopify-funnel-checkbox" type="checkbox" name="ecommerceFunnel" value="1" {{ (shopifyConfig.ecommerceFunnel ?? false) ? 'checked' : '' }} {{ shopifyMode == 'off' ? 'disabled' : '' }}>
+                Enable cart funnel capture on the storefront
+            </label>
+            <ul class="burrow-commerce-event-list burrow-muted">
+                <li><code>ecommerce.cart.added</code></li>
+                <li><code>ecommerce.cart.removed</code></li>
+            </ul>
+            <p class="burrow-muted" style="margin: 8px 0 0;">Checkout started, orders, and refunds are captured by Shopify-side integrations — this plugin never emits them in headless mode, so nothing is double-counted.</p>
+        </div>
+
+        <div style="margin-top: 14px; max-width: 480px;">
+            {{ forms.textField({
+                label: 'Shop domain'|t('burrow'),
+                instructions: detectedShopDomain
+                    ? ('Detected from the Shopify plugin: `' ~ detectedShopDomain ~ '`. Leave blank to use the detected value.')|t('burrow')
+                    : 'Your Shopify store domain, e.g. `my-store.myshopify.com`. Used to tag events with the store they belong to.'|t('burrow'),
+                id: 'shopDomain',
+                name: 'shopDomain',
+                value: shopifyConfig.shopDomain ?? '',
+                placeholder: detectedShopDomain ?: 'my-store.myshopify.com',
+            }) }}
+        </div>
+    </div>
+    <div style="margin-top: 16px;">
+        <button class="btn submit">{{ submitLabel }}</button>
+    </div>
+</form>
+<script>
+    (() => {
+        const modeInputs = Array.from(document.querySelectorAll('.burrow-shopify-mode-radio'));
+        const funnelWrap = document.querySelector('.burrow-shopify-funnel');
+        const funnelBox = document.querySelector('.burrow-shopify-funnel-checkbox');
+        const modeCards = Array.from(document.querySelectorAll('.burrow-shopify-mode-card'));
+        if (!modeInputs.length || !funnelWrap || !funnelBox) {
+            return;
+        }
+        const sync = () => {
+            const checked = modeInputs.find((input) => input.checked);
+            const mode = checked ? checked.value : 'track';
+            modeCards.forEach((card) => {
+                const input = card.querySelector('.burrow-shopify-mode-radio');
+                card.classList.toggle('is-selected', !!input && input.checked);
+            });
+            const enabled = mode !== 'off';
+            funnelWrap.classList.toggle('is-disabled', !enabled);
+            if (!enabled) {
+                funnelBox.checked = false;
+                funnelBox.setAttribute('disabled', 'disabled');
+            } else {
+                funnelBox.removeAttribute('disabled');
+            }
+        };
+        modeInputs.forEach((input) => input.addEventListener('change', sync));
+        sync();
+    })();
+</script>

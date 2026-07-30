@@ -215,6 +215,16 @@ class SettingsController extends Controller
                 } else {
                     $detail = 'Orders and line items';
                 }
+            } elseif ($integrationKey === 'shopify') {
+                $shopify = is_array($integrationSettings['shopify'] ?? null) ? $integrationSettings['shopify'] : [];
+                $shopDomain = trim((string)($shopify['shopDomain'] ?? ''));
+                if ((string)($shopify['mode'] ?? 'track') !== 'track') {
+                    $detail = 'Off';
+                } elseif (!empty($shopify['ecommerceFunnel'])) {
+                    $detail = 'Cart funnel' . ($shopDomain !== '' ? ' · ' . $shopDomain : '');
+                } else {
+                    $detail = 'Funnel capture off';
+                }
             }
             $integrationSummaryRows[] = [
                 'key' => $integrationKey,
@@ -232,6 +242,10 @@ class SettingsController extends Controller
                 'formAdapterViewData' => $formAdapterViewData,
                 'settings' => $integrationSettings,
                 'commerceOrderStatuses' => $integrationsService->getCommerceOrderStatuses(),
+                'shopify' => [
+                    'detectedShopDomain' => $plugin->getShopifyTracking()->detectShopDomainFromShopifyPlugin(),
+                    'suggested' => $plugin->getShopifyTracking()->isHeadlessShopifySuggested(),
+                ],
             ],
             'formIntegrationIds' => array_keys($formAdapterViewData),
             'integrationReadinessRows' => $integrationReadinessRows,
@@ -359,10 +373,30 @@ class SettingsController extends Controller
                 'ecommerceFunnel' => (bool)Craft::$app->getRequest()->getBodyParam('ecommerceFunnel', false),
                 'orderStatusMap' => $orderStatusMap,
             ];
-            $runtimeState['capabilities']['ecommerce_funnel'] = $mode === 'track' && !empty($integrationSettings['commerce']['ecommerceFunnel']);
+        } elseif ($integration === 'shopify') {
+            $mode = trim((string)Craft::$app->getRequest()->getBodyParam('shopifyMode', 'track'));
+            if (!in_array($mode, ['track', 'off'], true)) {
+                $mode = 'track';
+            }
+            $shopDomain = $plugin->getShopifyTracking()->normalizeShopDomain(
+                (string)Craft::$app->getRequest()->getBodyParam('shopDomain', '')
+            );
+            if ($shopDomain === '') {
+                $shopDomain = $plugin->getShopifyTracking()->detectShopDomainFromShopifyPlugin();
+            }
+            $integrationSettings['shopify'] = [
+                'mode' => $mode,
+                'ecommerceFunnel' => (bool)Craft::$app->getRequest()->getBodyParam('ecommerceFunnel', false),
+                'shopDomain' => $shopDomain,
+            ];
         }
 
         $runtimeState['integrationSettings'] = $integrationSettings;
+        if (in_array($integration, ['commerce', 'shopify'], true)) {
+            $capabilities = is_array($runtimeState['capabilities'] ?? null) ? $runtimeState['capabilities'] : [];
+            $capabilities['ecommerce_funnel'] = $plugin->getIntegrations()->resolveFunnelCapability($integrationSettings, $selected);
+            $runtimeState['capabilities'] = $capabilities;
+        }
 
         return $runtimeState;
     }

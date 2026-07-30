@@ -4,6 +4,16 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.4.0] - 2026-07-30
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Added
+
+- **Headless Shopify funnel capture:** new **Shopify (Headless)** integration for Craft frontends using `craftcms/shopify` with cart/checkout on Shopify's side. A plugin-injected collector script watches Shopify `cart/add` form submits (zero site-code changes) and exposes a `window.burrow.track()` hook for custom Storefront-API carts, then relays `ecommerce.cart.added` / `ecommerce.cart.removed` through a CSRF-protected, rate-limited same-origin controller (`/actions/burrow/collect`) to Burrow using the server-side ingestion key — no Burrow credential ever reaches the page.
+- Events are tagged `provider: shopify` and `shopDomain: <store>.myshopify.com` (auto-detected from the Shopify plugin settings, overridable), carry a client-minted `externalEventId` for retry-safe dedupe, and never include PII. Checkout, order, and refund events remain owned by the Shopify checkout pixel and Admin API integration configured in Burrow, so the funnel composes without double counting.
+- The integration is auto-suggested during setup when `craftcms/shopify` is installed and Craft Commerce is not. Link capabilities now report every selected ecommerce provider plus the combined `ecommerce_funnel` opt-in.
+
 ## [5.3.19] - 2026-07-18
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

@@ -18,6 +18,7 @@ use craft\helpers\UrlHelper;
 use craft\services\Elements;
 use craft\services\Plugins;
 use craft\web\UrlManager;
+use craft\web\View;
 
 class Plugin extends CraftPlugin
 {
@@ -41,6 +42,7 @@ class Plugin extends CraftPlugin
         $this->_registerElementTypes();
         $this->_registerCommerceHooks();
         $this->_registerFormHooks();
+        $this->_registerShopifyCollector();
         $this->_scheduleSystemJobs();
 
         Craft::info(
@@ -437,6 +439,54 @@ class Plugin extends CraftPlugin
                     ]);
                 }
             });
+        }
+    }
+
+    /**
+     * Injects the headless-Shopify frontend collector into site pages when the
+     * Shopify integration's funnel capture is enabled. The collector relays
+     * cart interactions to the same-origin `burrow/collect` action; no Burrow
+     * credential is ever exposed to the page.
+     */
+    private function _registerShopifyCollector(): void
+    {
+        $request = Craft::$app->getRequest();
+        if (
+            $request->getIsConsoleRequest()
+            || !$request->getIsSiteRequest()
+            || !$request->getIsGet()
+            || $request->getIsActionRequest()
+            || $request->getIsAjax()
+        ) {
+            return;
+        }
+
+        try {
+            if (!$this->getShopifyTracking()->shouldInjectCollector()) {
+                return;
+            }
+
+            $collectorJs = @file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . 'resources' . DIRECTORY_SEPARATOR . 'collector.js');
+            if (!is_string($collectorJs) || trim($collectorJs) === '') {
+                return;
+            }
+
+            $config = json_encode([
+                'endpoint' => UrlHelper::actionUrl('burrow/collect'),
+                'sessionInfoUrl' => UrlHelper::actionUrl('users/session-info'),
+            ], JSON_UNESCAPED_SLASHES);
+            if (!is_string($config)) {
+                return;
+            }
+
+            Craft::$app->getView()->registerJs(
+                'window.__burrowCollectorConfig = ' . $config . ';' . "\n" . $collectorJs,
+                View::POS_END
+            );
+        } catch (\Throwable $e) {
+            $this->getLogs()->log('warning', 'Shopify collector injection failed', 'shopify', 'ecommerce', null, [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

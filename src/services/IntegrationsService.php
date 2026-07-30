@@ -35,7 +35,7 @@ class IntegrationsService extends Component
      */
     public function integrationOrder(): array
     {
-        return array_merge($this->getFormIntegrations()->ids(), ['commerce']);
+        return array_merge($this->getFormIntegrations()->ids(), ['commerce', 'shopify']);
     }
 
     /**
@@ -48,6 +48,7 @@ class IntegrationsService extends Component
             $labels[$adapter->getId()] = $adapter->getLabel();
         }
         $labels['commerce'] = 'Craft Commerce';
+        $labels['shopify'] = 'Shopify (Headless)';
 
         return $labels;
     }
@@ -445,6 +446,7 @@ class IntegrationsService extends Component
             $result[$adapter->getId()] = $this->pluginStatus($adapter->getCraftPluginHandle(), $adapter->getLabel());
         }
         $result['commerce'] = $this->pluginStatus('commerce', 'Craft Commerce');
+        $result['shopify'] = $this->pluginStatus('shopify', 'Shopify (Headless)');
 
         return $result;
     }
@@ -580,11 +582,40 @@ class IntegrationsService extends Component
             }
         }
 
+        $ecommerce = [];
+        if (in_array('commerce', $selected, true)) {
+            $ecommerce[] = 'craft-commerce';
+        }
+        if (in_array('shopify', $selected, true)) {
+            $ecommerce[] = 'shopify';
+        }
+
         return [
             'forms' => $forms,
-            'ecommerce' => in_array('commerce', $selected, true) ? ['craft-commerce'] : [],
-            'ecommerce_funnel' => in_array('commerce', $selected, true),
+            'ecommerce' => $ecommerce,
+            'ecommerce_funnel' => $ecommerce !== [],
         ];
+    }
+
+    /**
+     * Effective `ecommerce_funnel` capability across every configured ecommerce integration.
+     *
+     * @param array<string,mixed> $integrationSettings
+     * @param string[] $selected
+     */
+    public function resolveFunnelCapability(array $integrationSettings, array $selected): bool
+    {
+        foreach (['commerce', 'shopify'] as $integration) {
+            if (!in_array($integration, $selected, true)) {
+                continue;
+            }
+            $config = is_array($integrationSettings[$integration] ?? null) ? $integrationSettings[$integration] : [];
+            if ((string)($config['mode'] ?? 'track') === 'track' && !empty($config['ecommerceFunnel'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -641,6 +672,9 @@ class IntegrationsService extends Component
             } elseif ($integration === 'commerce') {
                 $commerce = is_array($integrationSettings['commerce'] ?? null) ? $integrationSettings['commerce'] : [];
                 $status = isset($commerce['mode']) ? 'Configured' : 'Needs setup';
+            } elseif ($integration === 'shopify') {
+                $shopify = is_array($integrationSettings['shopify'] ?? null) ? $integrationSettings['shopify'] : [];
+                $status = isset($shopify['mode']) ? 'Configured' : 'Needs setup';
             }
             $rows[] = [
                 'name' => (string)($labels[$integration] ?? $integration),

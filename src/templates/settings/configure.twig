@@ -15,6 +15,7 @@
     freeform: 'Freeform',
     formie: 'Formie',
     commerce: 'Craft Commerce',
+    shopify: 'Shopify (Headless)',
     connection: 'Connection',
 } %}
 
@@ -167,6 +168,14 @@
                 <p><a class="btn" href="{{ cpUrl('burrow/settings', { section: 'integrations' }) }}">{{ 'Go to Integrations'|t('burrow') }}</a></p>
             {% else %}
                 {% include 'burrow/settings/_commerce-config' with { settingsMode: true } %}
+            {% endif %}
+
+        {% elseif section == 'shopify' %}
+            {% if 'shopify' not in state.selectedIntegrations %}
+                <p class="burrow-muted">{{ 'Shopify (Headless) is not enabled. Enable it under Integrations first.'|t('burrow') }}</p>
+                <p><a class="btn" href="{{ cpUrl('burrow/settings', { section: 'integrations' }) }}">{{ 'Go to Integrations'|t('burrow') }}</a></p>
+            {% else %}
+                {% include 'burrow/settings/_shopify-config' with { settingsMode: true } %}
             {% endif %}
 
         {% elseif section == 'connection' %}

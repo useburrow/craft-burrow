@@ -29,6 +29,7 @@ No webhook configurations in form plugins. No CSV imports. One plugin, total vis
 | **Freeform** | Form submissions, field mapping, per-form sync modes |
 | **Formie** | Form submissions, field mapping, per-form sync modes |
 | **Craft Commerce** | Orders, line items, ecommerce funnel events |
+| **Shopify (Headless)** | Cart funnel events (`ecommerce.cart.added` / `ecommerce.cart.removed`) on `craftcms/shopify` frontends |
 | **Craft CMS** | System snapshots — Craft version, PHP version, installed plugins |
 
 ## Control Panel Flow
@@ -84,6 +85,18 @@ Changes saved in Settings are pushed to Burrow automatically (contracts, capabil
 - Supports ecommerce event tracking mode
 - Optional ecommerce funnel capability flag
 - Supports historical order/item backfill into Burrow
+
+### Shopify (Headless)
+
+For Craft frontends that use [`craftcms/shopify`](https://github.com/craftcms/shopify) for catalog sync with cart and checkout on Shopify's side. Auto-suggested during setup when `craftcms/shopify` is installed and Craft Commerce is not.
+
+- A small collector script is injected into the site frontend (only when funnel capture is enabled) that:
+  - automatically captures forms posting to Shopify's `cart/add` endpoint — no site-code changes needed
+  - exposes `window.burrow.track({ type: 'cart.added' | 'cart.removed', productId, productName, variantName, quantity, unitPrice, currency, ... })` for custom Storefront-API carts
+- Events relay through a CSRF-protected, rate-limited same-origin endpoint (`/actions/burrow/collect`); the plugin validates and forwards them to Burrow server-side with the project ingestion key, so no Burrow credential is exposed to the page. Payloads carry no PII.
+- Events are tagged with `provider: shopify` and your shop domain (auto-detected from the Shopify plugin settings, overridable in settings).
+- Checkout, order, and refund events are captured by the Shopify checkout pixel and Admin API integration configured directly in Burrow (Integrations → Shopify) against the same project — the plugin never emits them in headless mode, so nothing is double counted.
+- Optional data attributes enrich auto-captured cart events: `data-product-name`, `data-variant-name`, `data-price`, `data-currency` (or `data-burrow-*` variants) on or above the cart form.
 
 ## Backfill and Operations
 

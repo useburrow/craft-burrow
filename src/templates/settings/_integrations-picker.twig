@@ -8,7 +8,8 @@
 {% set integrationDescriptions = {
     freeform: 'Capture Freeform submissions and sync contracts to Burrow.',
     formie: 'Capture Formie submissions with count-only or custom-field mappings.',
-    commerce: 'Sync Commerce order and item lifecycle events to Burrow.'
+    commerce: 'Sync Commerce order and item lifecycle events to Burrow.',
+    shopify: 'Capture the cart funnel on headless Shopify builds (craftcms/shopify frontend, Shopify cart/checkout).'
 } %}
 
 <form method="post" action="{{ actionUrl(saveIntegrationsAction) }}">
@@ -19,7 +20,8 @@
         <div class="burrow-integration-grid">
         {% for key, integration in availableIntegrations %}
             {% set isInstalled = integration.installed %}
-            {% set isChecked = key in state.selectedIntegrations %}
+            {% set isSuggested = key == 'shopify' and isInstalled and (integrationStepData.shopify.suggested ?? false) %}
+            {% set isChecked = key in state.selectedIntegrations or (isSuggested and not settingsMode and state.selectedIntegrations is empty) %}
             <div class="burrow-integration-card {{ isChecked ? 'is-selected' : '' }} {{ not isInstalled ? 'is-disabled' : '' }}">
                 <label class="burrow-integration-card-label">
                     <input
@@ -41,7 +43,7 @@
                         <span class="burrow-integration-title">{{ integration.label }}</span>
                         <div class="burrow-integration-meta">{{ 'Version:'|t('burrow') }} {{ integration.version ?: '-' }}</div>
                         <div class="burrow-integration-description">{{ integrationDescriptions[key] ?? 'Bridge this provider into Burrow event and contract flows.'|t('burrow') }}</div>
-                        <span class="burrow-integration-status">{{ isInstalled ? 'Installed'|t('burrow') : 'Not installed'|t('burrow') }}</span>
+                        <span class="burrow-integration-status">{{ isInstalled ? 'Installed'|t('burrow') : 'Not installed'|t('burrow') }}{% if isSuggested %} &middot; {{ 'Suggested for this site'|t('burrow') }}{% endif %}</span>
                     </span>
                 </label>
             </div>

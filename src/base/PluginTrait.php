@@ -8,6 +8,7 @@ use burrow\Burrow\services\EventLogService;
 use burrow\Burrow\services\FormTrackingService;
 use burrow\Burrow\services\IntegrationsService;
 use burrow\Burrow\services\QueueService;
+use burrow\Burrow\services\ShopifyTrackingService;
 use burrow\Burrow\services\StateService;
 use burrow\Burrow\services\SystemSnapshotService;
 
@@ -23,6 +24,7 @@ trait PluginTrait
             'integrations' => IntegrationsService::class,
             'logs' => EventLogService::class,
             'queue' => QueueService::class,
+            'shopifyTracking' => ShopifyTrackingService::class,
             'state' => StateService::class,
             'snapshot' => SystemSnapshotService::class,
         ]);
@@ -61,6 +63,11 @@ trait PluginTrait
     public function getQueue(): QueueService
     {
         return $this->get('queue');
+    }
+
+    public function getShopifyTracking(): ShopifyTrackingService
+    {
+        return $this->get('shopifyTracking');
     }
 
     public function getState(): StateService

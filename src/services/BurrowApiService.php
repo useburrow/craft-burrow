@@ -45,7 +45,7 @@ class BurrowApiService extends Component
 
     /**
      * @param array<string,string> $selection
-     * @return array{ok:bool,error:string,routing:array<string,mixed>,project:array<string,mixed>,ingestionKey:array<string,mixed>,sdkState:array<string,mixed>}
+     * @return array{ok:bool,error:string,routing:array<string,mixed>,project:array<string,mixed>,ingestionKey:array<string,mixed>,capabilities:array<string,mixed>,sdkState:array<string,mixed>}
      */
     public function link(string $baseUrl, string $apiKey, array $selection, array $capabilities = [], array $runtimeState = []): array
     {
@@ -60,6 +60,9 @@ class BurrowApiService extends Component
             $response = $client->link($request);
             $project = $response->project;
             $ingestion = $response->ingestionKey;
+            // Effective capability values echoed by Burrow (may differ from what we sent).
+            // Null-coalesced so SDK versions before 0.9.10 (no `capabilities` property) stay compatible.
+            $echoedCapabilities = is_array($response->capabilities ?? null) ? $response->capabilities : [];
 
             return [
                 'ok' => true,
@@ -77,6 +80,7 @@ class BurrowApiService extends Component
                     'projectId' => $ingestion?->projectId ?? '',
                     'keyPrefix' => $ingestion?->keyPrefix ?? '',
                 ],
+                'capabilities' => $echoedCapabilities,
                 'sdkState' => $client->getState()->toArray(),
             ];
         } catch (\Throwable $e) {
@@ -86,6 +90,7 @@ class BurrowApiService extends Component
                 'routing' => [],
                 'project' => [],
                 'ingestionKey' => [],
+                'capabilities' => [],
                 'sdkState' => [],
             ];
         }
@@ -149,6 +154,15 @@ class BurrowApiService extends Component
             'path' => (string)($project['burrowProjectPath'] ?? ''),
             'url' => (string)($project['burrowProjectUrl'] ?? ''),
         ];
+
+        // Burrow echoes the effective ecommerce_funnel value it persisted; that echo is
+        // authoritative over what we sent, and the headless-Shopify collector gates on it.
+        $echoedCapabilities = is_array($linkResult['capabilities'] ?? null) ? $linkResult['capabilities'] : [];
+        if (array_key_exists('ecommerce_funnel', $echoedCapabilities)) {
+            $storedCapabilities = is_array($runtimeState['capabilities'] ?? null) ? $runtimeState['capabilities'] : [];
+            $storedCapabilities['ecommerce_funnel'] = (bool)$echoedCapabilities['ecommerce_funnel'];
+            $runtimeState['capabilities'] = $storedCapabilities;
+        }
 
         return $runtimeState;
     }

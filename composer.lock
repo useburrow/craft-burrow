@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "fa9e48e1b4211029d53213b81242873b",
+    "content-hash": "67034b8921415373423f5fd4bb5ba900",
     "packages": [
         {
             "name": "bacon/bacon-qr-code",
@@ -6850,16 +6850,16 @@
         },
         {
             "name": "useburrow/sdk-php",
-            "version": "0.9.9",
+            "version": "0.9.10",
             "source": {
                 "type": "git",
                 "url": "https://github.com/useburrow/sdk-php.git",
-                "reference": "fafa157f503cdf19e9495a98cf5acc4c939ee5d9"
+                "reference": "195a7f48417a673ef253daa533d8ba3a8db11c61"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/useburrow/sdk-php/zipball/fafa157f503cdf19e9495a98cf5acc4c939ee5d9",
-                "reference": "fafa157f503cdf19e9495a98cf5acc4c939ee5d9",
+                "url": "https://api.github.com/repos/useburrow/sdk-php/zipball/195a7f48417a673ef253daa533d8ba3a8db11c61",
+                "reference": "195a7f48417a673ef253daa533d8ba3a8db11c61",
                 "shasum": ""
             },
             "require": {
@@ -6897,7 +6897,7 @@
                 "issues": "https://github.com/useburrow/sdk-php/issues",
                 "source": "https://github.com/useburrow/sdk-php"
             },
-            "time": "2026-06-19T15:34:23+00:00"
+            "time": "2026-07-31T01:25:37+00:00"
         },
         {
             "name": "voku/portable-ascii",

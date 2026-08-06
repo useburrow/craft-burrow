@@ -61,6 +61,7 @@ class QueueService extends Component
     public function enqueue(string $eventKey, array $payload, string $channel = '', string $eventName = '', int $maxAttempts = 6): bool
     {
         try {
+            $routing = $this->_routingFromPayload($payload);
             $id = bin2hex(random_bytes(16));
             Craft::$app->getDb()->createCommand()->insert('{{%burrow_outbox}}', [
                 'id' => $id,
@@ -71,6 +72,8 @@ class QueueService extends Component
                 'attempt_count' => 0,
                 'max_attempts' => max(1, $maxAttempts),
                 'payload' => $payload,
+                'project_id' => $routing['projectId'],
+                'site_id' => $routing['siteId'],
                 'last_error' => null,
                 'next_attempt_at' => null,
                 'sent_at' => null,
@@ -266,6 +269,8 @@ class QueueService extends Component
 
         $rows = [];
         foreach ($byKey as $key => $record) {
+            $payload = (array)($record['payload'] ?? []);
+            $routing = $this->_routingFromPayload($payload);
             $rows[] = [
                 bin2hex(random_bytes(16)),
                 $key,
@@ -274,7 +279,9 @@ class QueueService extends Component
                 'sent',
                 1,
                 self::DEFAULT_MAX_ATTEMPTS,
-                (array)($record['payload'] ?? []),
+                $payload,
+                $routing['projectId'],
+                $routing['siteId'],
                 null,
                 null,
                 $now,
@@ -292,6 +299,8 @@ class QueueService extends Component
                 'attempt_count',
                 'max_attempts',
                 'payload',
+                'project_id',
+                'site_id',
                 'last_error',
                 'next_attempt_at',
                 'sent_at',
@@ -593,6 +602,7 @@ class QueueService extends Component
                     $canAuto = $scheduleAutoRetry && Plugin::getInstance()->canDispatchToBurrow();
                     $newStatus = ($canAuto && $attemptCount < $storedMax) ? 'retrying' : 'failed';
                 }
+                $routing = $this->_routingFromPayload($payload);
                 $db->createCommand()->insert('{{%burrow_outbox}}', [
                     'id' => $id,
                     'event_key' => $eventKey,
@@ -602,6 +612,8 @@ class QueueService extends Component
                     'attempt_count' => $attemptCount,
                     'max_attempts' => $storedMax,
                     'payload' => $payload,
+                    'project_id' => $routing['projectId'],
+                    'site_id' => $routing['siteId'],
                     'last_error' => $lastError,
                     'next_attempt_at' => null,
                     'sent_at' => $sentAt,
@@ -621,6 +633,7 @@ class QueueService extends Component
             $attemptCount = $prevAttempts + 1;
             $storedMax = max((int)($row['max_attempts'] ?? 1), $maxAttempts);
             $queueDelayedRetryAfterCommit = false;
+            $routing = $this->_routingFromPayload($payload);
 
             if ($status === 'sent') {
                 $newStatus = 'sent';
@@ -635,6 +648,8 @@ class QueueService extends Component
                         'attempt_count' => $successAttemptCount,
                         'max_attempts' => $storedMax,
                         'payload' => $payload,
+                        'project_id' => $routing['projectId'] ?? ($row['project_id'] ?? null),
+                        'site_id' => $routing['siteId'] ?? ($row['site_id'] ?? null),
                         'last_error' => null,
                         'next_attempt_at' => null,
                         'sent_at' => $sentAt,
@@ -660,6 +675,8 @@ class QueueService extends Component
                         'attempt_count' => $attemptCount,
                         'max_attempts' => $storedMax,
                         'payload' => $payload,
+                        'project_id' => $routing['projectId'] ?? ($row['project_id'] ?? null),
+                        'site_id' => $routing['siteId'] ?? ($row['site_id'] ?? null),
                         'last_error' => $lastError,
                         'next_attempt_at' => null,
                         'sent_at' => null,
@@ -806,6 +823,29 @@ class QueueService extends Component
         } catch (\Throwable) {
             // Best-effort cleanup.
         }
+    }
+
+    /**
+     * @return array{projectId:?string,siteId:?int}
+     */
+    private function _routingFromPayload(array $payload): array
+    {
+        $projectId = trim((string)($payload['projectId'] ?? ''));
+        if ($projectId === '') {
+            $projectId = trim((string)($payload['_burrowProjectId'] ?? ''));
+        }
+        $siteId = (int)($payload['_burrowSiteId'] ?? $payload['craftSiteId'] ?? 0);
+        if ($siteId <= 0 && $projectId !== '') {
+            $found = Plugin::getInstance()->getState()->findSiteStateByProjectId($projectId);
+            if ($found !== null) {
+                $siteId = (int)($found['siteId'] ?? 0);
+            }
+        }
+
+        return [
+            'projectId' => $projectId !== '' ? $projectId : null,
+            'siteId' => $siteId > 0 ? $siteId : null,
+        ];
     }
 
     private function outboxElementTableExists(): bool

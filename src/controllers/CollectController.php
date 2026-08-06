@@ -28,8 +28,20 @@ class CollectController extends Controller
         $this->requirePostRequest();
 
         $plugin = Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$plugin->getShopifyTracking()->isShopifyFunnelEnabled($runtimeState) || !$plugin->canDispatchToBurrow($runtimeState)) {
+        $siteId = 0;
+        try {
+            $siteId = (int)(Craft::$app->getSites()->getCurrentSite()->id ?? 0);
+        } catch (\Throwable) {
+            $siteId = (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+        }
+        $runtimeState = $siteId > 0
+            ? $plugin->getState()->getSiteState($siteId)
+            : $plugin->getState()->getState();
+        if (
+            empty($runtimeState['enabled'])
+            || !$plugin->getShopifyTracking()->isShopifyFunnelEnabled($runtimeState)
+            || !$plugin->canDispatchToBurrow($runtimeState)
+        ) {
             return $this->jsonResponse(['ok' => false, 'error' => 'not_enabled'], 404);
         }
 

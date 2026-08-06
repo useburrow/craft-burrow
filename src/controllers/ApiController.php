@@ -7,10 +7,30 @@ use yii\web\Response;
 
 use burrow\Burrow\Plugin;
 
+/**
+ * Anonymous Burrow callback endpoints (system snapshot refresh).
+ *
+ * @author Burrow Analytics, LLC
+ * @since 5.0.0
+ */
 class ApiController extends Controller
 {
+    // =========================================================================
+    // Properties
+    // =========================================================================
+
+    /**
+     * @var array|bool|int
+     */
     protected array|bool|int $allowAnonymous = ['stack-snapshot'];
 
+    // =========================================================================
+    // Public Methods
+    // =========================================================================
+
+    /**
+     * @inheritdoc
+     */
     public function beforeAction($action): bool
     {
         if ($action->id === 'stack-snapshot') {
@@ -20,11 +40,20 @@ class ApiController extends Controller
         return parent::beforeAction($action);
     }
 
+    /**
+     * Publishes a system stack snapshot for the linked site matching the Bearer ingestion key.
+     *
+     * @return Response
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
+     */
     public function actionStackSnapshot(): Response
     {
         $this->requirePostRequest();
 
-        if (!$this->authenticateBearerToken()) {
+        $siteRuntime = $this->authenticateBearerToken();
+        if ($siteRuntime === null) {
             return $this->jsonResponse(['ok' => false, 'error' => 'unauthorized'], 401);
         }
 
@@ -33,38 +62,50 @@ class ApiController extends Controller
         }
 
         $plugin = Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-
-        if (!$plugin->canDispatchToBurrow($runtimeState)) {
+        if (!$plugin->canDispatchToBurrow($siteRuntime)) {
             return $this->jsonResponse(['ok' => false, 'error' => 'not_configured'], 422);
         }
 
-        $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
+        $siteRuntime['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
 
         $result = $plugin->getBurrowApi()->publishSystemSnapshot(
             $plugin->getBurrowBaseUrl(),
             $plugin->getBurrowApiKey(),
-            $runtimeState,
-            $runtimeState['lastSnapshot']
+            $siteRuntime,
+            $siteRuntime['lastSnapshot']
         );
 
-        $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+        $integrationSettings = is_array($siteRuntime['integrationSettings'] ?? null) ? $siteRuntime['integrationSettings'] : [];
         $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
 
         if ($result['ok']) {
             $systemJobs['snapshotLastRunAt'] = gmdate('c');
             $systemJobs['snapshotLastError'] = '';
-            $plugin->getLogs()->log('info', 'Snapshot published via API request', 'system', 'system');
+            $plugin->getLogs()->log('info', 'Snapshot published via API request', 'system', 'system', null, [
+                'siteId' => (int)($siteRuntime['craftSiteId'] ?? 0),
+            ]);
         } else {
             $systemJobs['snapshotLastError'] = (string)$result['error'];
             $plugin->getLogs()->log('warning', 'Snapshot publish via API request failed', 'system', 'system', null, [
                 'error' => $result['error'],
+                'siteId' => (int)($siteRuntime['craftSiteId'] ?? 0),
             ]);
         }
 
         $integrationSettings['systemJobs'] = $systemJobs;
-        $runtimeState['integrationSettings'] = $integrationSettings;
-        $plugin->getState()->saveState($runtimeState);
+        $siteId = (int)($siteRuntime['craftSiteId'] ?? 0);
+        if ($siteId > 0) {
+            $plugin->getState()->saveSiteState($siteId, [
+                'lastSnapshot' => (array)($siteRuntime['lastSnapshot'] ?? []),
+            ], [
+                'integrationSettings' => $integrationSettings,
+            ]);
+        } else {
+            $runtimeState = $plugin->getState()->getState();
+            $runtimeState['lastSnapshot'] = $siteRuntime['lastSnapshot'];
+            $runtimeState['integrationSettings'] = $integrationSettings;
+            $plugin->getState()->saveState($runtimeState);
+        }
 
         if (!$result['ok']) {
             return $this->jsonResponse(['ok' => false, 'error' => 'publish_failed'], 502);
@@ -72,6 +113,10 @@ class ApiController extends Controller
 
         return $this->jsonResponse(['ok' => true]);
     }
+
+    // =========================================================================
+    // Private Methods
+    // =========================================================================
 
     /**
      * @param array<string,mixed> $data
@@ -82,31 +127,25 @@ class ApiController extends Controller
         return $this->asJson($data);
     }
 
-    private function authenticateBearerToken(): bool
+    /**
+     * Authenticates against any linked site's ingestion key and returns that site's merged state.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function authenticateBearerToken(): ?array
     {
         $header = (string)Craft::$app->getRequest()->getHeaders()->get('authorization', '');
 
         if (stripos($header, 'Bearer ') !== 0) {
-            return false;
+            return null;
         }
 
         $token = trim(substr($header, 7));
         if ($token === '') {
-            return false;
+            return null;
         }
 
-        $runtimeState = Plugin::getInstance()->getState()->getState();
-        $ingestionKey = trim((string)(
-            is_array($runtimeState['ingestionKey'] ?? null)
-                ? ($runtimeState['ingestionKey']['key'] ?? '')
-                : ''
-        ));
-
-        if ($ingestionKey === '') {
-            return false;
-        }
-
-        return hash_equals($ingestionKey, $token);
+        return Plugin::getInstance()->getState()->findSiteStateByIngestionKey($token);
     }
 
     private function isRateLimited(): bool

@@ -9,8 +9,9 @@
     { label: 'Burrow'|t('burrow'), url: cpUrl('burrow') },
 ] %}
 
-{% set stepTitles = {
+        {% set stepTitles = {
     connection: 'Establish connection',
+    sites: 'Choose sites',
     project: 'Choose client (Project)',
     integrations: 'Integrations',
     freeform: 'Freeform setup',
@@ -157,6 +158,9 @@
                 {% if relinkMode %}
                     {{ hiddenInput('relink', '1') }}
                 {% endif %}
+                {% if craftSiteId is defined and craftSiteId %}
+                    {{ hiddenInput('craftSiteId', craftSiteId) }}
+                {% endif %}
                 {{ forms.textField({
                     label: 'Base URL',
                     name: 'baseUrl',
@@ -175,25 +179,79 @@
                 {% endif %}
             </form>
 
+        {% elseif step == 'sites' %}
+            <p class="burrow-muted">
+                {{ 'Choose which Craft sites should sync with Burrow. Each enabled site links to its own Burrow project.'|t('burrow') }}
+            </p>
+            <form method="post" action="{{ actionUrl('burrow/settings/save-sites') }}">
+                {{ csrfInput() }}
+                <div class="burrow-form-list" style="max-height: none;">
+                    {% for site in craftSites %}
+                        {% set siteState = siteStates[site.id|string] ?? {} %}
+                        {% set checked = siteState.enabled is defined ? siteState.enabled : site.primary %}
+                        <label>
+                            <input type="checkbox" name="enabledSites[]" value="{{ site.id }}" {% if checked %}checked{% endif %}>
+                            <strong>{{ site.name }}</strong>
+                            <span class="burrow-muted">({{ site.handle }}{% if site.primary %} · {{ 'Primary'|t('burrow') }}{% endif %})</span>
+                            <div class="burrow-muted" style="margin-left: 22px; font-size: 12px;">{{ site.baseUrl }}</div>
+                        </label>
+                    {% endfor %}
+                </div>
+                <div style="margin-top: 15px;">
+                    <button class="btn submit">{{ 'Continue'|t('burrow') }}</button>
+                </div>
+            </form>
+
         {% elseif step == 'project' %}
             <p class="burrow-muted">
                 {% if relinkMode %}
-                    {{ 'Confirm the Burrow project for this site. Click Re-link Project to issue a new ingestion key (even if you keep the same project).'|t('burrow') }}
+                    {{ 'Confirm the Burrow project for this Craft site. Click Re-link Project to issue a new ingestion key (even if you keep the same project).'|t('burrow') }}
+                {% elseif isMultiSite %}
+                    {{ 'Select the Burrow project for this Craft site. Projects already linked to another site are hidden.'|t('burrow') }}
                 {% else %}
                     {{ 'Select the Burrow project this Craft site should sync with.'|t('burrow') }}
                 {% endif %}
             </p>
 
+            {% if isMultiSite and craftSites|length %}
+                <p>
+                    <label for="burrowCraftSiteSwitcher"><strong>{{ 'Craft site'|t('burrow') }}</strong></label>
+                    <select id="burrowCraftSiteSwitcher" class="text fullwidth" style="max-width: 420px; display: block; margin-top: 6px;">
+                        {% for site in craftSites %}
+                            {% set siteState = siteStates[site.id|string] ?? {} %}
+                            {% if siteState.enabled or site.id == craftSiteId %}
+                                <option value="{{ site.id }}" {% if site.id == craftSiteId %}selected{% endif %}>
+                                    {{ site.name }}{% if siteState.projectId is defined and siteState.projectId %} · {{ 'linked'|t('burrow') }}{% endif %}
+                                </option>
+                            {% endif %}
+                        {% endfor %}
+                    </select>
+                </p>
+                {% js %}
+                    $('#burrowCraftSiteSwitcher').on('change', function () {
+                        const siteId = $(this).val();
+                        const params = new URLSearchParams(window.location.search);
+                        params.set('step', 'project');
+                        params.set('craftSiteId', siteId);
+                        {% if relinkMode %}params.set('relink', '1');{% endif %}
+                        window.location.search = params.toString();
+                    });
+                {% endjs %}
+            {% endif %}
+
             {% if projects is empty %}
-                <p>No discovered projects yet. Run Step 1 first.</p>
+                <p>{{ 'No discovered projects yet. Run Step 1 first, or switch Craft sites after connection.'|t('burrow') }}</p>
             {% else %}
-                {% set selectedProjectId = state.projectId ?? '' %}
+                {% set selectedProjectId = activeSiteState.projectId ?? state.projectId ?? '' %}
                 {% set projectOptions = [] %}
                 {% set projectDetails = {} %}
                 {% for project in projects %}
                     {% set projectId = project.projectId ?? '' %}
                     {% if projectId %}
                         {% set projectLabel = (project.projectName ?: project.projectId) ~ ' — ' ~ (project.clientName ?: project.clientId) %}
+                        {% if project.isExactHostMatch %}
+                            {% set projectLabel = projectLabel ~ ' ★' %}
+                        {% endif %}
                         {% set projectOptions = projectOptions|merge([{
                             label: projectLabel,
                             value: projectId,
@@ -202,12 +260,15 @@
                             (projectId): {
                                 clientName: project.clientName ?? '',
                                 clientId: project.clientId ?? '',
+                                matchScore: project.matchScore,
+                                isExactHostMatch: project.isExactHostMatch,
                             },
                         }) %}
                     {% endif %}
                 {% endfor %}
                 <form method="post" action="{{ actionUrl('burrow/settings/select-project') }}">
                     {{ csrfInput() }}
+                    {{ hiddenInput('craftSiteId', craftSiteId) }}
                     {% if relinkMode %}
                         {{ hiddenInput('relink', '1') }}
                     {% endif %}
@@ -222,6 +283,14 @@
                         }) }}
                     </div>
                     <p class="burrow-project-detail" hidden></p>
+                    {% if pendingSiteConfirm %}
+                        <div class="warning with-icon" style="margin-top: 12px;">
+                            <label>
+                                <input type="checkbox" name="confirmSiteChange" value="1">
+                                {{ 'I confirm changing this project’s registered site URL to this Craft site.'|t('burrow') }}
+                            </label>
+                        </div>
+                    {% endif %}
                     <div style="margin-top: 15px;">
                         <button class="btn submit">{{ relinkMode ? 'Re-link Project'|t('burrow') : 'Link Project'|t('burrow') }}</button>
                         {% if relinkMode %}

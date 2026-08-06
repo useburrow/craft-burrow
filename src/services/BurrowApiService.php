@@ -14,14 +14,23 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Discovers Burrow projects for the given account credentials and Craft site URL.
+     *
+     * @param string $baseUrl Burrow API base URL
+     * @param string $apiKey organization API key
+     * @param array<string,mixed> $capabilities
+     * @param string|null $siteUrl Craft site base URL to register with Burrow
      * @return array{ok:bool,error:string,projects:array<int,array<string,mixed>>,raw:array<string,mixed>}
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
      */
-    public function discover(string $baseUrl, string $apiKey, array $capabilities = []): array
+    public function discover(string $baseUrl, string $apiKey, array $capabilities = [], ?string $siteUrl = null): array
     {
         try {
             $client = $this->createClient($baseUrl, $apiKey, [], [], false, true, null);
             $request = new \Burrow\Sdk\Contracts\OnboardingDiscoveryRequest(
-                site: $this->buildSitePayload(),
+                site: $this->buildSitePayload($siteUrl),
                 capabilities: $capabilities
             );
             $response = $client->discover($request);
@@ -44,19 +53,33 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Links a Craft site URL to a Burrow project and returns routing + ingestion key.
+     *
+     * @param string $baseUrl Burrow API base URL
+     * @param string $apiKey organization API key
      * @param array<string,string> $selection
-     * @return array{ok:bool,error:string,routing:array<string,mixed>,project:array<string,mixed>,ingestionKey:array<string,mixed>,capabilities:array<string,mixed>,sdkState:array<string,mixed>}
+     * @param array<string,mixed> $capabilities
+     * @param array<string,mixed> $runtimeState
+     * @param string|null $siteUrl Craft site base URL for this link
+     * @param bool $confirmSiteChange when true, confirm an intentional site URL change (never default true)
+     * @return array{ok:bool,error:string,code:string,routing:array<string,mixed>,project:array<string,mixed>,ingestionKey:array<string,mixed>,capabilities:array<string,mixed>,sdkState:array<string,mixed>}
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
      */
-    public function link(string $baseUrl, string $apiKey, array $selection, array $capabilities = [], array $runtimeState = []): array
-    {
+    public function link(
+        string $baseUrl,
+        string $apiKey,
+        array $selection,
+        array $capabilities = [],
+        array $runtimeState = [],
+        ?string $siteUrl = null,
+        bool $confirmSiteChange = false
+    ): array {
         try {
             $client = $this->createClient($baseUrl, $apiKey, $runtimeState['sdkState'] ?? [], $runtimeState['ingestionKey'] ?? [], false, true, null);
-            $request = new \Burrow\Sdk\Contracts\OnboardingLinkRequest(
-                site: $this->buildSitePayload(),
-                selection: $selection,
-                platform: 'craft',
-                capabilities: $capabilities
-            );
+            $sitePayload = $this->buildSitePayload($siteUrl);
+            $request = $this->_createOnboardingLinkRequest($sitePayload, $selection, $capabilities, $confirmSiteChange);
             $response = $client->link($request);
             $project = $response->project;
             $ingestion = $response->ingestionKey;
@@ -67,6 +90,7 @@ class BurrowApiService extends Component
             return [
                 'ok' => true,
                 'error' => '',
+                'code' => '',
                 'routing' => is_array($response->routing) ? $response->routing : [],
                 'project' => [
                     'id' => $project?->id ?? '',
@@ -84,9 +108,12 @@ class BurrowApiService extends Component
                 'sdkState' => $client->getState()->toArray(),
             ];
         } catch (\Throwable $e) {
+            $code = $this->_extractLinkErrorCode($e);
+
             return [
                 'ok' => false,
                 'error' => $e->getMessage(),
+                'code' => $code,
                 'routing' => [],
                 'project' => [],
                 'ingestionKey' => [],
@@ -97,7 +124,14 @@ class BurrowApiService extends Component
     }
 
     /**
+     * Applies a successful link response onto a site-scoped (or legacy flat) state array.
+     *
+     * @param array<string,mixed> $runtimeState
      * @param array<string,mixed> $linkResult
+     * @return array<string,mixed>
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
      */
     public function applyLinkResult(array $runtimeState, array $linkResult): array
     {
@@ -154,6 +188,8 @@ class BurrowApiService extends Component
             'path' => (string)($project['burrowProjectPath'] ?? ''),
             'url' => (string)($project['burrowProjectUrl'] ?? ''),
         ];
+        $runtimeState['linked'] = true;
+        $runtimeState['enabled'] = true;
 
         // Burrow echoes the effective ecommerce_funnel value it persisted; that echo is
         // authoritative over what we sent, and the headless-Shopify collector gates on it.
@@ -411,6 +447,8 @@ class BurrowApiService extends Component
                 if (!is_array($event) || empty($event['event']) || empty($event['channel'])) {
                     continue;
                 }
+                // Strip plugin-local routing markers; outbox keeps the original payload.
+                unset($event['_burrowSiteId'], $event['_burrowProjectId']);
                 try {
                     $client->publishEvent($event);
                     $published++;
@@ -1157,7 +1195,7 @@ class BurrowApiService extends Component
             'platform' => 'craft',
             'pluginVersion' => \burrow\Burrow\Plugin::getInstance()->getVersion(),
             'site' => [
-                'url' => (string)(Craft::$app->getSites()->getPrimarySite()?->baseUrl ?? ''),
+                'url' => (string)($runtimeState['siteUrl'] ?? Craft::$app->getSites()->getPrimarySite()?->baseUrl ?? ''),
                 'cmsVersion' => Craft::$app->getVersion(),
             ],
             'routing' => [
@@ -1415,22 +1453,141 @@ class BurrowApiService extends Component
                 'clientName' => (string)($project['clientName'] ?? $client['name'] ?? ''),
                 'projectId' => (string)($project['projectId'] ?? $project['id'] ?? ''),
                 'projectName' => (string)($project['projectName'] ?? $project['name'] ?? ''),
+                'matchScore' => isset($project['matchScore']) ? (float)$project['matchScore'] : null,
+                'isExactHostMatch' => array_key_exists('isExactHostMatch', $project)
+                    ? (bool)$project['isExactHostMatch']
+                    : null,
             ];
         }
+
+        usort($result, static function (array $a, array $b): int {
+            $aExact = !empty($a['isExactHostMatch']);
+            $bExact = !empty($b['isExactHostMatch']);
+            if ($aExact !== $bExact) {
+                return $aExact ? -1 : 1;
+            }
+            $aScore = $a['matchScore'] ?? -1.0;
+            $bScore = $b['matchScore'] ?? -1.0;
+            if ($aScore !== $bScore) {
+                return $bScore <=> $aScore;
+            }
+
+            return strcmp((string)($a['projectName'] ?? ''), (string)($b['projectName'] ?? ''));
+        });
 
         return $result;
     }
 
     /**
+     * Builds the site payload sent to Burrow discover/link endpoints.
+     *
+     * @param string|null $siteUrl Craft site base URL; defaults to current then primary site
      * @return array<string,mixed>
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.4.0
      */
-    private function buildSitePayload(): array
+    public function buildSitePayload(?string $siteUrl = null): array
     {
+        $url = trim((string)$siteUrl);
+        if ($url === '') {
+            try {
+                $url = (string)(Craft::$app->getSites()->getCurrentSite()->getBaseUrl() ?? '');
+            } catch (\Throwable) {
+                $url = '';
+            }
+        }
+        if ($url === '') {
+            $url = (string)(Craft::$app->getSites()->getPrimarySite()?->getBaseUrl() ?? '');
+        }
+
         return [
-            'url' => Craft::$app->getSites()->getPrimarySite()?->baseUrl ?? '',
+            'url' => $url,
             'cms' => 'craft',
             'cmsVersion' => Craft::$app->getVersion(),
             'phpVersion' => PHP_VERSION,
         ];
+    }
+
+    /**
+     * Creates an OnboardingLinkRequest, passing confirmSiteChange when the installed SDK supports it.
+     *
+     * SDK 0.9.x does not expose confirmSiteChange on OnboardingLinkRequest; when unsupported the
+     * flag is omitted from the request body. Callers must still handle HTTP 409 `project_site_mismatch`
+     * and only retry with confirmSiteChange after explicit admin confirmation.
+     *
+     * @param array<string,mixed> $sitePayload
+     * @param array<string,string> $selection
+     * @param array<string,mixed> $capabilities
+     */
+    private function _createOnboardingLinkRequest(
+        array $sitePayload,
+        array $selection,
+        array $capabilities,
+        bool $confirmSiteChange
+    ): \Burrow\Sdk\Contracts\OnboardingLinkRequest {
+        $class = '\Burrow\Sdk\Contracts\OnboardingLinkRequest';
+        try {
+            $reflection = new \ReflectionClass($class);
+            $constructor = $reflection->getConstructor();
+            $paramNames = [];
+            if ($constructor !== null) {
+                foreach ($constructor->getParameters() as $parameter) {
+                    $paramNames[] = $parameter->getName();
+                }
+            }
+            if (in_array('confirmSiteChange', $paramNames, true)) {
+                return new $class(
+                    site: $sitePayload,
+                    selection: $selection,
+                    platform: 'craft',
+                    capabilities: $capabilities,
+                    confirmSiteChange: $confirmSiteChange
+                );
+            }
+        } catch (\Throwable) {
+            // Fall through to the standard constructor.
+        }
+
+        return new \Burrow\Sdk\Contracts\OnboardingLinkRequest(
+            site: $sitePayload,
+            selection: $selection,
+            platform: 'craft',
+            capabilities: $capabilities
+        );
+    }
+
+    /**
+     * Extracts a machine-readable link error code such as project_site_mismatch from SDK exceptions.
+     */
+    private function _extractLinkErrorCode(\Throwable $e): string
+    {
+        $message = strtolower($e->getMessage());
+        if (str_contains($message, 'project_site_mismatch') || str_contains($message, 'site_mismatch')) {
+            return 'project_site_mismatch';
+        }
+
+        foreach (['code', 'errorCode', 'error_code'] as $property) {
+            if (!property_exists($e, $property)) {
+                continue;
+            }
+            try {
+                $value = trim((string)$e->{$property});
+                if ($value !== '') {
+                    return $value;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        if (method_exists($e, 'getCode') && is_string($e->getCode()) && $e->getCode() !== '') {
+            return (string)$e->getCode();
+        }
+
+        if (preg_match('/\b(project_site_mismatch)\b/i', $e->getMessage(), $matches) === 1) {
+            return strtolower((string)$matches[1]);
+        }
+
+        return '';
     }
 }

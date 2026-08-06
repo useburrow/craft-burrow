@@ -1,6 +1,7 @@
 <?php
 namespace burrow\Burrow\services;
 
+use Craft;
 use craft\base\Component;
 use yii\base\Event;
 
@@ -8,6 +9,53 @@ class CommerceTrackingService extends Component
 {
     /** @var array<string,bool> Order IDs that had a line item removed during this request */
     private array $ordersWithRemovalInFlight = [];
+
+    /**
+     * Resolves site-scoped runtime state for an order (or the current request site).
+     *
+     * @param object|null $order
+     * @return array<string,mixed>
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.4.0
+     */
+    public function resolveRuntimeStateForOrder(?object $order = null): array
+    {
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $siteId = 0;
+        if ($order !== null) {
+            foreach (['getOrderSiteId', 'getSiteId'] as $method) {
+                if (method_exists($order, $method)) {
+                    try {
+                        $value = $order->{$method}();
+                        if (is_numeric($value) && (int)$value > 0) {
+                            $siteId = (int)$value;
+                            break;
+                        }
+                    } catch (\Throwable) {
+                    }
+                }
+            }
+            if ($siteId <= 0) {
+                try {
+                    $value = $order->orderSiteId ?? $order->siteId ?? null;
+                    if (is_numeric($value) && (int)$value > 0) {
+                        $siteId = (int)$value;
+                    }
+                } catch (\Throwable) {
+                }
+            }
+        }
+        if ($siteId <= 0) {
+            try {
+                $siteId = (int)(Craft::$app->getSites()->getCurrentSite()->id ?? 0);
+            } catch (\Throwable) {
+                $siteId = (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+            }
+        }
+
+        return $plugin->getState()->getSiteState($siteId);
+    }
 
     public function handleCartLineItemAddedEvent(Event $event): void
     {
@@ -23,8 +71,8 @@ class CommerceTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
             return;
         }
 
@@ -77,8 +125,8 @@ class CommerceTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
             return;
         }
 
@@ -125,8 +173,8 @@ class CommerceTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceTrackingEnabled($runtimeState)) {
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceTrackingEnabled($runtimeState)) {
             return;
         }
 
@@ -260,12 +308,6 @@ class CommerceTrackingService extends Component
      */
     public function handleOrderStatusChangeEvent(Event $event): void
     {
-        $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceTrackingEnabled($runtimeState)) {
-            return;
-        }
-
         $orderHistory = $event->orderHistory ?? null;
         if (!is_object($orderHistory)) {
             return;
@@ -276,6 +318,12 @@ class CommerceTrackingService extends Component
             $order = is_object($event->sender ?? null) ? $event->sender : null;
         }
         if ($order === null) {
+            return;
+        }
+
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceTrackingEnabled($runtimeState)) {
             return;
         }
 
@@ -421,8 +469,8 @@ class CommerceTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
             return;
         }
 
@@ -511,8 +559,8 @@ class CommerceTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isCommerceFunnelEnabled($runtimeState)) {
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
             return;
         }
 
@@ -991,6 +1039,15 @@ class CommerceTrackingService extends Component
     private function publishAndTrackRealtimeEvent(array $eventEnvelope, array $runtimeState, array $identity): bool
     {
         $plugin = \burrow\Burrow\Plugin::getInstance();
+        $siteId = (int)($runtimeState['craftSiteId'] ?? 0);
+        if ($siteId > 0) {
+            $eventEnvelope['_burrowSiteId'] = $siteId;
+        }
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        if ($projectId !== '') {
+            $eventEnvelope['_burrowProjectId'] = $projectId;
+        }
+
         $eventKey = $this->buildRealtimeEventKey($eventEnvelope, $identity);
         if ($plugin->getQueue()->wasSent($eventKey)) {
             return true;

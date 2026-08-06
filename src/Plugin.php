@@ -26,7 +26,7 @@ class Plugin extends CraftPlugin
 
     public static ?Plugin $plugin = null;
 
-    public string $schemaVersion = '5.3.0';
+    public string $schemaVersion = '5.4.0';
     public bool $hasCpSettings = true;
     public bool $hasCpSection = true;
 
@@ -77,8 +77,9 @@ class Plugin extends CraftPlugin
     }
 
     /**
-     * Account-level API key for onboarding (discover/link). Stored in DB only while setting up; cleared after a project link returns an ingestion key.
-     * Does not return project-config `apiKey` once {@see runtimeStateHasIngestionKey} is true so stale YAML cannot override project-scoped auth.
+     * Account-level (organization) API key for onboarding (discover/link).
+     * Retained after project linking so additional Craft sites can be linked with the same org key.
+     * Falls back to project-config `apiKey` when the runtime connection key is empty and no ingestion key is present yet.
      */
     public function getBurrowApiKey(): string
     {

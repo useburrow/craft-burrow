@@ -104,6 +104,26 @@ class SettingsController extends Controller
         $availableBackfillSources = $plugin->getBackfill()->availableSources($runtimeState);
         $backfillSources = array_values(array_filter(array_map('strval', (array)($backfillState['sources'] ?? $availableBackfillSources))));
 
+        $craftSites = $plugin->getState()->listCraftSites();
+        $craftSiteId = (int)Craft::$app->getRequest()->getQueryParam('craftSiteId', 0);
+        if ($craftSiteId <= 0) {
+            $craftSiteId = $this->resolveDefaultOnboardingSiteId($runtimeState, $craftSites, $relinkMode);
+        }
+        $projectsSessionKey = $craftSiteId > 0
+            ? 'burrow.discoveredProjects.' . $craftSiteId
+            : 'burrow.discoveredProjects';
+        $projects = (array)Craft::$app->getSession()->get($projectsSessionKey, []);
+        if ($projects === []) {
+            $projects = (array)Craft::$app->getSession()->get('burrow.discoveredProjects', []);
+        }
+        $projects = $this->filterProjectsForSite($projects, $craftSiteId);
+
+        $siteStates = is_array($runtimeState['siteStates'] ?? null) ? $runtimeState['siteStates'] : [];
+        $activeSiteState = $craftSiteId > 0
+            ? $plugin->getState()->getSiteState($craftSiteId)
+            : $runtimeState;
+        $pendingSiteConfirm = (bool)Craft::$app->getSession()->get('burrow.pendingSiteConfirm.' . $craftSiteId, false);
+
         return array_merge($shared, [
             'settings' => $settings,
             'step' => $step,
@@ -111,7 +131,13 @@ class SettingsController extends Controller
             'currentStepIndex' => $currentStepIndex,
             'wizardSteps' => $wizardSteps,
             'nextStep' => $integrationsService->nextWizardStep($step, $selectedIntegrations),
-            'projects' => (array)Craft::$app->getSession()->get('burrow.discoveredProjects', []),
+            'projects' => $projects,
+            'craftSites' => $craftSites,
+            'craftSiteId' => $craftSiteId,
+            'siteStates' => $siteStates,
+            'activeSiteState' => $activeSiteState,
+            'pendingSiteConfirm' => $pendingSiteConfirm,
+            'isMultiSite' => count($craftSites) > 1,
             'selectedSubnavItem' => $relinkMode ? 'settings' : 'setup',
             'settingsMode' => false,
             'relinkMode' => $relinkMode,
@@ -300,14 +326,97 @@ class SettingsController extends Controller
             || $request->getBodyParam('relink') === '1';
     }
 
-    private function setupStepUrl(string $step, bool $relink = false): string
+    private function setupStepUrl(string $step, bool $relink = false, int $craftSiteId = 0): string
     {
         $url = 'burrow/setup?step=' . urlencode($step);
         if ($relink) {
             $url .= '&relink=1';
         }
+        if ($craftSiteId > 0) {
+            $url .= '&craftSiteId=' . $craftSiteId;
+        }
 
         return $url;
+    }
+
+    /**
+     * @param array<string,mixed> $runtimeState
+     * @param array<int,array<string,mixed>> $craftSites
+     */
+    private function resolveDefaultOnboardingSiteId(array $runtimeState, array $craftSites, bool $relinkMode): int
+    {
+        if ($craftSites === []) {
+            return 0;
+        }
+
+        $siteStates = is_array($runtimeState['siteStates'] ?? null) ? $runtimeState['siteStates'] : [];
+        if (!$relinkMode) {
+            foreach ($craftSites as $site) {
+                $siteId = (int)($site['id'] ?? 0);
+                if ($siteId <= 0) {
+                    continue;
+                }
+                $state = is_array($siteStates[(string)$siteId] ?? null) ? $siteStates[(string)$siteId] : [];
+                if (!empty($state['enabled']) && trim((string)($state['projectId'] ?? '')) === '') {
+                    return $siteId;
+                }
+            }
+        }
+
+        foreach ($craftSites as $site) {
+            if (!empty($site['primary'])) {
+                return (int)$site['id'];
+            }
+        }
+
+        return (int)($craftSites[0]['id'] ?? 0);
+    }
+
+    /**
+     * Hides projects already linked by another Craft site in this install.
+     *
+     * @param array<int,mixed> $projects
+     * @return array<int,array<string,mixed>>
+     */
+    private function filterProjectsForSite(array $projects, int $craftSiteId): array
+    {
+        $plugin = Plugin::getInstance();
+        $filtered = [];
+        foreach ($projects as $project) {
+            if (!is_array($project)) {
+                continue;
+            }
+            $projectId = trim((string)($project['projectId'] ?? ''));
+            if ($projectId === '') {
+                continue;
+            }
+            if ($craftSiteId > 0 && $plugin->getState()->isProjectLinkedToOtherSite($projectId, $craftSiteId)) {
+                continue;
+            }
+            $filtered[] = $project;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * @return int the next enabled site that still needs linking, or 0 when done
+     */
+    private function nextUnlinkedEnabledSiteId(array $runtimeState, int $exceptSiteId = 0): int
+    {
+        $siteStates = is_array($runtimeState['siteStates'] ?? null) ? $runtimeState['siteStates'] : [];
+        foreach (Plugin::getInstance()->getState()->listCraftSites() as $site) {
+            $siteId = (int)($site['id'] ?? 0);
+            if ($siteId <= 0 || $siteId === $exceptSiteId) {
+                continue;
+            }
+            $state = is_array($siteStates[(string)$siteId] ?? null) ? $siteStates[(string)$siteId] : [];
+            if (!empty($state['enabled']) && trim((string)($state['projectId'] ?? '')) === '') {
+                return $siteId;
+            }
+        }
+
+        return 0;
     }
 
     /**
@@ -651,10 +760,11 @@ class SettingsController extends Controller
         $apiKey = trim((string)$request->getBodyParam('apiKey', $plugin->getBurrowApiKey()));
 
         $relink = $this->isRelinkRequest() || $plugin->isOnboardingCompleted();
+        $craftSiteId = (int)$request->getBodyParam('craftSiteId', 0);
 
         if ($baseUrl === '' || $apiKey === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Base URL and API key are required.'));
-            return $this->redirect($this->setupStepUrl('connection', $relink));
+            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
         }
 
         $runtimeState = $plugin->getState()->getState();
@@ -662,7 +772,7 @@ class SettingsController extends Controller
         $runtimeState['connectionApiKey'] = $apiKey;
         if (!$plugin->getState()->saveState($runtimeState)) {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Could not save connection settings.'));
-            return $this->redirect($this->setupStepUrl('connection', $relink));
+            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
         }
 
         $general = Craft::$app->getConfig()->getGeneral();
@@ -678,29 +788,129 @@ class SettingsController extends Controller
                 }
                 Craft::error('Burrow project config sync failed: ' . json_encode($errors), __METHOD__);
                 Craft::$app->getSession()->setError($message);
-                return $this->redirect($this->setupStepUrl('connection', $relink));
+                return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
             }
         }
 
-        $discover = $plugin->getBurrowApi()->discover($baseUrl, $apiKey, (array)($runtimeState['capabilities'] ?? []));
+        $craftSites = $plugin->getState()->listCraftSites();
+        $isMultiSite = count($craftSites) > 1;
+        $discoverSiteUrl = null;
+        if ($craftSiteId > 0) {
+            $siteState = $plugin->getState()->getSiteState($craftSiteId);
+            $discoverSiteUrl = trim((string)($siteState['siteUrl'] ?? '')) ?: null;
+        } elseif (!$isMultiSite && isset($craftSites[0])) {
+            $discoverSiteUrl = (string)($craftSites[0]['baseUrl'] ?? '');
+            $craftSiteId = (int)($craftSites[0]['id'] ?? 0);
+            $plugin->getState()->saveSiteState($craftSiteId, [
+                'enabled' => true,
+                'siteUrl' => $discoverSiteUrl,
+            ], [
+                'connectionBaseUrl' => $baseUrl,
+                'connectionApiKey' => $apiKey,
+            ]);
+        }
+
+        $discover = $plugin->getBurrowApi()->discover(
+            $baseUrl,
+            $apiKey,
+            (array)($runtimeState['capabilities'] ?? []),
+            $discoverSiteUrl
+        );
         if (!$discover['ok']) {
             $plugin->getLogs()->log('error', 'Connection discover failed', 'onboarding', 'system', null, ['error' => $discover['error']]);
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Connection failed: {error}', ['error' => $discover['error']]));
-            return $this->redirect($this->setupStepUrl('connection', $relink));
+            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
         }
 
         Craft::$app->getSession()->set('burrow.discoveredProjects', $discover['projects']);
+        if ($craftSiteId > 0) {
+            Craft::$app->getSession()->set('burrow.discoveredProjects.' . $craftSiteId, $discover['projects']);
+        }
+
         if (!$relink) {
+            if ($isMultiSite) {
+                $runtimeState = $plugin->getState()->getState();
+                $runtimeState['onboardingStep'] = 'sites';
+                $plugin->getState()->saveState($runtimeState);
+                $plugin->getLogs()->log('info', 'Connection established; choose sites to link', 'onboarding', 'system', null, [
+                    'projectsCount' => count($discover['projects']),
+                ]);
+                Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Connection established.'));
+
+                return $this->redirect($this->setupStepUrl('sites', false));
+            }
+
+            $runtimeState = $plugin->getState()->getState();
             $runtimeState['onboardingStep'] = 'project';
             $plugin->getState()->saveState($runtimeState);
         }
+
         $plugin->getLogs()->log('info', 'Connection established and projects discovered', 'onboarding', 'system', null, [
             'projectsCount' => count($discover['projects']),
+            'siteId' => $craftSiteId,
         ]);
 
         Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Connection established.'));
 
-        return $this->redirect($this->setupStepUrl('project', $relink));
+        return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
+    }
+
+    public function actionSaveSites(): ?Response
+    {
+        $this->requirePostRequest();
+        $this->requirePermission('accessPlugin-burrow');
+
+        $plugin = Plugin::getInstance();
+        $enabledIds = array_values(array_filter(array_map('intval', (array)Craft::$app->getRequest()->getBodyParam('enabledSites', []))));
+        $craftSites = $plugin->getState()->listCraftSites();
+        if ($enabledIds === []) {
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'Enable at least one Craft site to continue.'));
+            return $this->redirect($this->setupStepUrl('sites'));
+        }
+
+        $allowedIds = [];
+        foreach ($craftSites as $site) {
+            $allowedIds[(int)$site['id']] = $site;
+        }
+
+        $firstEnabledId = 0;
+        foreach ($craftSites as $site) {
+            $siteId = (int)$site['id'];
+            $enabled = in_array($siteId, $enabledIds, true) && isset($allowedIds[$siteId]);
+            $plugin->getState()->saveSiteState($siteId, [
+                'enabled' => $enabled,
+                'siteUrl' => (string)$site['baseUrl'],
+                'siteUid' => (string)$site['uid'],
+                'siteHandle' => (string)$site['handle'],
+            ]);
+            if ($enabled && $firstEnabledId === 0) {
+                $firstEnabledId = $siteId;
+            }
+        }
+
+        $runtimeState = $plugin->getState()->getState();
+        $runtimeState['onboardingStep'] = 'project';
+        $plugin->getState()->saveState($runtimeState);
+
+        // Discover projects for the first enabled site using that site's URL.
+        $siteState = $plugin->getState()->getSiteState($firstEnabledId);
+        $discover = $plugin->getBurrowApi()->discover(
+            $plugin->getBurrowBaseUrl(),
+            $plugin->getBurrowApiKey(),
+            (array)($runtimeState['capabilities'] ?? []),
+            trim((string)($siteState['siteUrl'] ?? '')) ?: null
+        );
+        if ($discover['ok']) {
+            Craft::$app->getSession()->set('burrow.discoveredProjects.' . $firstEnabledId, $discover['projects']);
+            Craft::$app->getSession()->set('burrow.discoveredProjects', $discover['projects']);
+        }
+
+        $plugin->getLogs()->log('info', 'Sites selected for Burrow linking', 'onboarding', 'system', null, [
+            'enabledSiteIds' => $enabledIds,
+        ]);
+        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Sites saved. Link a Burrow project for each enabled site.'));
+
+        return $this->redirect($this->setupStepUrl('project', false, $firstEnabledId));
     }
 
     public function actionSelectProject(): ?Response
@@ -711,6 +921,18 @@ class SettingsController extends Controller
         $request = Craft::$app->getRequest();
         $plugin = Plugin::getInstance();
         $runtimeState = $plugin->getState()->getState();
+        $craftSiteId = (int)$request->getBodyParam('craftSiteId', 0);
+        if ($craftSiteId <= 0) {
+            $craftSiteId = $this->resolveDefaultOnboardingSiteId(
+                $runtimeState,
+                $plugin->getState()->listCraftSites(),
+                $this->isRelinkRequest() || $plugin->isOnboardingCompleted()
+            );
+        }
+        if ($craftSiteId <= 0) {
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'Choose a Craft site before linking a project.'));
+            return $this->redirect($this->setupStepUrl('project'));
+        }
 
         // customSelect coerces JSON option values to objects and posts "[object Object]".
         // Accept a plain projectId (preferred) or legacy JSON, then hydrate from session.
@@ -729,7 +951,10 @@ class SettingsController extends Controller
                 'projectId' => $rawSelection,
             ];
         }
-        $discoveredProjects = (array)Craft::$app->getSession()->get('burrow.discoveredProjects', []);
+        $discoveredProjects = (array)Craft::$app->getSession()->get('burrow.discoveredProjects.' . $craftSiteId, []);
+        if ($discoveredProjects === []) {
+            $discoveredProjects = (array)Craft::$app->getSession()->get('burrow.discoveredProjects', []);
+        }
         if ($selection['projectId'] !== '') {
             foreach ($discoveredProjects as $project) {
                 if (!is_array($project)) {
@@ -749,45 +974,86 @@ class SettingsController extends Controller
         }
 
         $relink = $this->isRelinkRequest() || $plugin->isOnboardingCompleted();
+        $confirmSiteChange = $request->getBodyParam('confirmSiteChange') === '1';
 
         if ($selection['projectId'] === '') {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Please choose a project.'));
-            return $this->redirect($this->setupStepUrl('project', $relink));
+            return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
         }
 
-        $runtimeState['capabilities'] = $plugin->getIntegrations()->buildCapabilities(
+        if ($plugin->getState()->isProjectLinkedToOtherSite($selection['projectId'], $craftSiteId)) {
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'That Burrow project is already linked to another Craft site in this install.'));
+            return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
+        }
+
+        $siteRuntime = $plugin->getState()->getSiteState($craftSiteId);
+        $siteRuntime['capabilities'] = $plugin->getIntegrations()->buildCapabilities(
             (array)($runtimeState['selectedIntegrations'] ?? [])
         );
+        $siteUrl = trim((string)($siteRuntime['siteUrl'] ?? ''));
 
         $link = $plugin->getBurrowApi()->link(
             $plugin->getBurrowBaseUrl(),
             $plugin->getBurrowApiKey(),
             $selection,
-            (array)$runtimeState['capabilities'],
-            $runtimeState
+            (array)$siteRuntime['capabilities'],
+            $siteRuntime,
+            $siteUrl !== '' ? $siteUrl : null,
+            $confirmSiteChange
         );
         if (!$link['ok']) {
-            $plugin->getLogs()->log('error', 'Project link failed', 'onboarding', 'system', null, ['error' => $link['error']]);
+            $code = (string)($link['code'] ?? '');
+            if ($code === 'project_site_mismatch' && !$confirmSiteChange) {
+                Craft::$app->getSession()->set('burrow.pendingSiteConfirm.' . $craftSiteId, true);
+                Craft::$app->getSession()->setError(Craft::t(
+                    'burrow',
+                    'This Burrow project is registered to a different site URL. Confirm the site URL change to continue, or choose another project.'
+                ));
+                return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
+            }
+            $plugin->getLogs()->log('error', 'Project link failed', 'onboarding', 'system', null, [
+                'error' => $link['error'],
+                'code' => $code,
+                'siteId' => $craftSiteId,
+            ]);
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Project linking failed: {error}', ['error' => $link['error']]));
-            return $this->redirect($this->setupStepUrl('project', $relink));
+            return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
         }
 
-        $runtimeState = $plugin->getBurrowApi()->applyLinkResult($runtimeState, $link);
+        Craft::$app->getSession()->remove('burrow.pendingSiteConfirm.' . $craftSiteId);
+        $siteRuntime = $plugin->getBurrowApi()->applyLinkResult($siteRuntime, $link);
 
-        if (!$plugin->runtimeStateHasIngestionKey($runtimeState)) {
-            $plugin->getLogs()->log('error', 'Project link succeeded but no ingestion key was returned', 'onboarding', 'system', null, $selection);
+        if (!$plugin->runtimeStateHasIngestionKey($siteRuntime)) {
+            $plugin->getLogs()->log('error', 'Project link succeeded but no ingestion key was returned', 'onboarding', 'system', null, $selection + ['siteId' => $craftSiteId]);
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Project linking succeeded but Burrow did not return an ingestion key. Try again or re-enter your account API key.'));
-            return $this->redirect($this->setupStepUrl('project', $relink));
+            return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
         }
 
-        $runtimeState['connectionApiKey'] = '';
-        $plugin->clearAccountApiKeyFromProjectConfigIfAllowed();
+        // Retain the organization API key so additional Craft sites can be linked.
+        $plugin->getState()->saveSiteState($craftSiteId, [
+            'enabled' => true,
+            'linked' => true,
+            'projectId' => (string)($siteRuntime['projectId'] ?? ''),
+            'clientId' => (string)($siteRuntime['clientId'] ?? ''),
+            'organizationId' => (string)($siteRuntime['organizationId'] ?? ''),
+            'projectSourceId' => (string)($siteRuntime['projectSourceId'] ?? ''),
+            'sourceIds' => (array)($siteRuntime['sourceIds'] ?? []),
+            'sdkState' => (array)($siteRuntime['sdkState'] ?? []),
+            'ingestionKey' => (array)($siteRuntime['ingestionKey'] ?? []),
+            'burrowProject' => (array)($siteRuntime['burrowProject'] ?? []),
+            'siteUrl' => $siteUrl,
+        ], [
+            'capabilities' => (array)($siteRuntime['capabilities'] ?? $runtimeState['capabilities'] ?? []),
+            'connectionBaseUrl' => (string)($runtimeState['connectionBaseUrl'] ?? ''),
+            'connectionApiKey' => (string)($runtimeState['connectionApiKey'] ?? ''),
+        ]);
 
         if ($relink) {
+            $runtimeState = $plugin->getState()->getState();
             $syncResult = $plugin->getIntegrations()->syncConfiguration($runtimeState, false);
             $runtimeState = $syncResult['runtimeState'];
             $plugin->getState()->saveState($runtimeState);
-            $plugin->getLogs()->log('info', 'Project re-linked', 'settings', 'system', null, $selection);
+            $plugin->getLogs()->log('info', 'Project re-linked', 'settings', 'system', null, $selection + ['siteId' => $craftSiteId]);
 
             if ($syncResult['ok']) {
                 Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Project re-linked. A new ingestion key is active.'));
@@ -800,9 +1066,30 @@ class SettingsController extends Controller
             return $this->redirect($this->configureSectionUrl('connection'));
         }
 
+        $runtimeState = $plugin->getState()->getState();
+        $nextSiteId = $this->nextUnlinkedEnabledSiteId($runtimeState, $craftSiteId);
+        if ($nextSiteId > 0) {
+            $nextSite = $plugin->getState()->getSiteState($nextSiteId);
+            $discover = $plugin->getBurrowApi()->discover(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                (array)($runtimeState['capabilities'] ?? []),
+                trim((string)($nextSite['siteUrl'] ?? '')) ?: null
+            );
+            if ($discover['ok']) {
+                Craft::$app->getSession()->set('burrow.discoveredProjects.' . $nextSiteId, $discover['projects']);
+            }
+            $runtimeState['onboardingStep'] = 'project';
+            $plugin->getState()->saveState($runtimeState);
+            $plugin->getLogs()->log('info', 'Project linked; continue with next site', 'onboarding', 'system', null, $selection + ['siteId' => $craftSiteId, 'nextSiteId' => $nextSiteId]);
+            Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Project linked. Continue with the next enabled site.'));
+
+            return $this->redirect($this->setupStepUrl('project', false, $nextSiteId));
+        }
+
         $runtimeState['onboardingStep'] = 'integrations';
         $plugin->getState()->saveState($runtimeState);
-        $plugin->getLogs()->log('info', 'Project linked', 'onboarding', 'system', null, $selection);
+        $plugin->getLogs()->log('info', 'Project linked', 'onboarding', 'system', null, $selection + ['siteId' => $craftSiteId]);
 
         Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Project selected and linked.'));
 
@@ -1025,12 +1312,33 @@ class SettingsController extends Controller
         $plugin = Plugin::getInstance();
         $runtimeState = $plugin->getState()->getState();
         $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
-        $syncResult = $plugin->getBurrowApi()->publishSystemSnapshot(
-            $plugin->getBurrowBaseUrl(),
-            $plugin->getBurrowApiKey(),
-            $runtimeState,
-            $runtimeState['lastSnapshot']
-        );
+        $linkedSites = $plugin->getState()->getLinkedSiteStates();
+        if ($linkedSites === []) {
+            $syncResult = $plugin->getBurrowApi()->publishSystemSnapshot(
+                $plugin->getBurrowBaseUrl(),
+                $plugin->getBurrowApiKey(),
+                $runtimeState,
+                $runtimeState['lastSnapshot']
+            );
+        } else {
+            $syncResult = ['ok' => true, 'error' => ''];
+            foreach ($linkedSites as $siteKey => $_meta) {
+                $siteRuntime = $plugin->getState()->getSiteState((int)$siteKey);
+                $siteRuntime['lastSnapshot'] = $runtimeState['lastSnapshot'];
+                $siteResult = $plugin->getBurrowApi()->publishSystemSnapshot(
+                    $plugin->getBurrowBaseUrl(),
+                    $plugin->getBurrowApiKey(),
+                    $siteRuntime,
+                    $siteRuntime['lastSnapshot']
+                );
+                $plugin->getState()->saveSiteState((int)$siteKey, [
+                    'lastSnapshot' => $siteRuntime['lastSnapshot'],
+                ]);
+                if (empty($siteResult['ok'])) {
+                    $syncResult = $siteResult;
+                }
+            }
+        }
         if ($syncResult['ok']) {
             $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
             $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];

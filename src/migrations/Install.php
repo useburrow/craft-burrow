@@ -26,6 +26,7 @@ class Install extends Migration
                 'onboardingCompleted' => $this->boolean()->defaultValue(false),
                 'connectionBaseUrl' => $this->text(),
                 'connectionApiKey' => $this->text(),
+                'siteStates' => $this->json(),
                 'dateCreated' => $this->dateTime()->notNull(),
                 'dateUpdated' => $this->dateTime()->notNull(),
                 'uid' => $this->uid(),
@@ -42,6 +43,8 @@ class Install extends Migration
                 'attempt_count' => $this->integer()->notNull()->defaultValue(0),
                 'max_attempts' => $this->integer()->notNull()->defaultValue(6),
                 'payload' => $this->json()->notNull(),
+                'project_id' => $this->string(),
+                'site_id' => $this->integer(),
                 'last_error' => $this->text(),
                 'next_attempt_at' => $this->dateTime(),
                 'sent_at' => $this->dateTime(),
@@ -52,6 +55,8 @@ class Install extends Migration
             $this->createIndex('idx_burrow_outbox_event_key', '{{%burrow_outbox}}', ['event_key'], true);
             $this->createIndex('idx_burrow_outbox_status', '{{%burrow_outbox}}', ['status'], false);
             $this->createIndex('idx_burrow_outbox_next_attempt', '{{%burrow_outbox}}', ['next_attempt_at'], false);
+            $this->createIndex('idx_burrow_outbox_project_id', '{{%burrow_outbox}}', ['project_id'], false);
+            $this->createIndex('idx_burrow_outbox_site_id', '{{%burrow_outbox}}', ['site_id'], false);
         }
 
         if (!$this->db->tableExists('{{%burrow_outbox_sent}}')) {

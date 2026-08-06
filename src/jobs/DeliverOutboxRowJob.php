@@ -6,16 +6,39 @@ use craft\queue\BaseJob;
 
 /**
  * Republishes a single outbox payload to Burrow (manual retry or automatic backoff).
+ *
+ * Resolves credentials from the row's persisted project_id/site_id so delivery never
+ * depends on a mutable "current" global settings view alone.
+ *
+ * @author Burrow Analytics, LLC
+ * @since 5.0.0
  */
 class DeliverOutboxRowJob extends BaseJob
 {
+    // =========================================================================
+    // Properties
+    // =========================================================================
+
+    /**
+     * @var string
+     */
     public string $outboxId = '';
 
+    // =========================================================================
+    // Public Methods
+    // =========================================================================
+
+    /**
+     * @inheritdoc
+     */
     protected function defaultDescription(): ?string
     {
         return Craft::t('burrow', 'Deliver Burrow outbox event');
     }
 
+    /**
+     * @inheritdoc
+     */
     public function execute($queue): void
     {
         $outboxId = trim($this->outboxId);
@@ -25,7 +48,7 @@ class DeliverOutboxRowJob extends BaseJob
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
         $row = Craft::$app->getDb()->createCommand(
-            'SELECT id, event_key, channel, event_name, status, attempt_count, max_attempts, payload
+            'SELECT id, event_key, channel, event_name, status, attempt_count, max_attempts, payload, project_id, site_id
              FROM {{%burrow_outbox}}
              WHERE id = :id
              LIMIT 1',
@@ -55,7 +78,18 @@ class DeliverOutboxRowJob extends BaseJob
             return;
         }
 
-        $runtimeState = $plugin->getState()->getState();
+        $projectId = trim((string)($row['project_id'] ?? ''));
+        if ($projectId === '') {
+            $projectId = trim((string)($payload['projectId'] ?? ''));
+        }
+        $siteId = isset($row['site_id']) && $row['site_id'] !== null && $row['site_id'] !== ''
+            ? (int)$row['site_id']
+            : null;
+
+        $runtimeState = $plugin->getState()->resolveRuntimeStateForDelivery(
+            $projectId !== '' ? $projectId : null,
+            $siteId
+        );
         if (!$plugin->canDispatchToBurrow($runtimeState)) {
             $plugin->getQueue()->markFailed(
                 $eventKey,

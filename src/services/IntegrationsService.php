@@ -56,14 +56,22 @@ class IntegrationsService extends Component
     /**
      * @param string[] $selected
      * @return array<string,string>
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
      */
     public function buildWizardSteps(array $selected): array
     {
         $steps = [
             'connection' => 'Connection',
-            'project' => 'Project',
-            'integrations' => 'Integrations',
         ];
+
+        if (count(Craft::$app->getSites()->getAllSites()) > 1) {
+            $steps['sites'] = 'Sites';
+        }
+
+        $steps['project'] = 'Project';
+        $steps['integrations'] = 'Integrations';
 
         $labels = $this->integrationLabels();
         foreach ($this->integrationOrder() as $integration) {
@@ -112,9 +120,14 @@ class IntegrationsService extends Component
     }
 
     /**
+     * Syncs forms contracts (and optionally re-links / publishes a snapshot) for each linked Craft site.
+     *
+     * Shared Formie/Freeform forms are registered under every linked project. Install-level settings
+     * (selected integrations, contract sync meta) are shared; per-site routing/keys stay isolated.
+     *
      * @param array<string,mixed> $runtimeState
-     * @param bool $forceRelink When true, re-link the project with current capabilities (e.g. after integration selection changes).
-     * @param bool $publishSnapshot When true, publish a system stack snapshot (onboarding only; routine settings saves skip this).
+     * @param bool $forceRelink When true, re-link each linked project with current capabilities (e.g. after integration selection changes).
+     * @param bool $publishSnapshot When true, publish a system stack snapshot per linked site (onboarding only; routine settings saves skip this).
      * @return array{
      *     ok:bool,
      *     error:string,
@@ -125,12 +138,30 @@ class IntegrationsService extends Component
      *     snapshotSynced:bool,
      *     notice:string
      * }
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.0.0
      */
     public function syncConfiguration(array $runtimeState, bool $forceRelink = false, bool $publishSnapshot = false): array
     {
         $plugin = Plugin::getInstance();
+        $stateService = $plugin->getState();
+        $linkedSites = $stateService->getLinkedSiteStates();
 
-        if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
+        // Legacy / mid-onboarding: flat project fields without siteStates entries yet.
+        if ($linkedSites === [] && trim((string)($runtimeState['projectId'] ?? '')) !== '') {
+            $siteId = (int)($runtimeState['craftSiteId'] ?? Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+            if ($siteId > 0) {
+                $linkedSites[(string)$siteId] = [
+                    'siteId' => $siteId,
+                    'projectId' => (string)$runtimeState['projectId'],
+                    'enabled' => true,
+                    'linked' => true,
+                ];
+            }
+        }
+
+        if ($linkedSites === []) {
             return [
                 'ok' => false,
                 'error' => Craft::t('burrow', 'Project is not linked yet.'),
@@ -143,24 +174,198 @@ class IntegrationsService extends Component
             ];
         }
 
-        if (!$plugin->canDispatchToBurrow($runtimeState)) {
-            $missing = [];
-            if ($plugin->getBurrowBaseUrl() === '') {
-                $missing[] = Craft::t('burrow', 'base URL');
-            }
-            if (trim((string)($runtimeState['projectId'] ?? '')) === '') {
-                $missing[] = Craft::t('burrow', 'linked project');
-            }
-            if (!$plugin->runtimeStateHasIngestionKey($runtimeState) && $plugin->getBurrowApiKey() === '') {
-                $missing[] = Craft::t('burrow', 'ingestion key');
+        $relinked = false;
+        $contractsSynced = false;
+        $contractsCount = 0;
+        $snapshotSynced = false;
+        $lastSnapshotError = '';
+        $anySiteOk = false;
+        $lastError = '';
+
+        foreach ($linkedSites as $siteKey => $_meta) {
+            $siteId = (int)$siteKey;
+            $siteRuntime = $stateService->getSiteState($siteId);
+            // Keep install-level fields from the caller (may include unsaved integration edits).
+            foreach (['selectedIntegrations', 'capabilities', 'integrationSettings', 'onboardingStep', 'onboardingCompleted', 'connectionBaseUrl', 'connectionApiKey'] as $installKey) {
+                if (array_key_exists($installKey, $runtimeState)) {
+                    $siteRuntime[$installKey] = $runtimeState[$installKey];
+                }
             }
 
+            if (!$plugin->canDispatchToBurrow($siteRuntime)) {
+                $lastError = Craft::t('burrow', 'Burrow connection is not ready for site {site}. Re-link the project if you recently rotated credentials.', [
+                    'site' => (string)($siteRuntime['siteHandle'] ?? $siteId),
+                ]);
+                continue;
+            }
+
+            if ($forceRelink) {
+                $selection = [
+                    'organizationId' => trim((string)($siteRuntime['organizationId'] ?? '')),
+                    'clientId' => trim((string)($siteRuntime['clientId'] ?? '')),
+                    'projectId' => trim((string)($siteRuntime['projectId'] ?? '')),
+                ];
+                if ($selection['projectId'] === '') {
+                    $lastError = Craft::t('burrow', 'Project is not linked yet.');
+                    continue;
+                }
+
+                $siteUrl = trim((string)($siteRuntime['siteUrl'] ?? ''));
+                $link = $plugin->getBurrowApi()->link(
+                    $plugin->getBurrowBaseUrl(),
+                    $plugin->getBurrowApiKey(),
+                    $selection,
+                    (array)($siteRuntime['capabilities'] ?? []),
+                    $siteRuntime,
+                    $siteUrl !== '' ? $siteUrl : null,
+                    false
+                );
+                if (!$link['ok']) {
+                    $plugin->getLogs()->log('error', 'Project re-link failed during configuration sync', 'settings', 'system', null, [
+                        'error' => $link['error'],
+                        'siteId' => $siteId,
+                        'code' => $link['code'] ?? '',
+                    ]);
+                    $lastError = Craft::t('burrow', 'Project re-link failed: {error}', ['error' => $link['error']]);
+                    continue;
+                }
+
+                $siteRuntime = $plugin->getBurrowApi()->applyLinkResult($siteRuntime, $link);
+                $relinked = true;
+                $stateService->saveSiteState($siteId, [
+                    'enabled' => true,
+                    'linked' => true,
+                    'projectId' => (string)($siteRuntime['projectId'] ?? ''),
+                    'clientId' => (string)($siteRuntime['clientId'] ?? ''),
+                    'organizationId' => (string)($siteRuntime['organizationId'] ?? ''),
+                    'projectSourceId' => (string)($siteRuntime['projectSourceId'] ?? ''),
+                    'sourceIds' => (array)($siteRuntime['sourceIds'] ?? []),
+                    'sdkState' => (array)($siteRuntime['sdkState'] ?? []),
+                    'ingestionKey' => (array)($siteRuntime['ingestionKey'] ?? []),
+                    'burrowProject' => (array)($siteRuntime['burrowProject'] ?? []),
+                    'siteUrl' => (string)($siteRuntime['siteUrl'] ?? ''),
+                ], [
+                    'selectedIntegrations' => (array)($runtimeState['selectedIntegrations'] ?? []),
+                    'capabilities' => (array)($runtimeState['capabilities'] ?? []),
+                    'integrationSettings' => (array)($runtimeState['integrationSettings'] ?? []),
+                    'connectionBaseUrl' => (string)($runtimeState['connectionBaseUrl'] ?? ''),
+                    'connectionApiKey' => (string)($runtimeState['connectionApiKey'] ?? ''),
+                ]);
+            }
+
+            $contracts = $this->buildFormsContracts($siteRuntime);
+            $siteContractsCount = count($contracts);
+            $contractsCount = max($contractsCount, $siteContractsCount);
+
+            if ($siteContractsCount > 0) {
+                $result = $plugin->getBurrowApi()->submitFormsContracts(
+                    $plugin->getBurrowBaseUrl(),
+                    $plugin->getBurrowApiKey(),
+                    $siteRuntime,
+                    $contracts
+                );
+                if (!$result['ok']) {
+                    $plugin->getLogs()->log('error', 'Forms contract sync failed', 'settings', 'system', null, [
+                        'error' => $result['error'],
+                        'siteId' => $siteId,
+                    ]);
+                    $lastError = Craft::t('burrow', 'Contract sync failed: {error}', ['error' => $result['error']]);
+                    continue;
+                }
+
+                $siteRuntime['sdkState'] = is_array($result['sdkState'] ?? null) ? $result['sdkState'] : (array)($siteRuntime['sdkState'] ?? []);
+                $contractMappings = is_array($result['contractMappings'] ?? null) ? $result['contractMappings'] : [];
+                if ($contractMappings !== []) {
+                    $siteRuntime['sdkState']['contractMappings'] = $contractMappings;
+                }
+                $projectSourceId = trim((string)($result['projectSourceId'] ?? ''));
+                if ($projectSourceId !== '') {
+                    $siteRuntime['projectSourceId'] = $projectSourceId;
+                    $sourceIds = is_array($siteRuntime['sourceIds'] ?? null) ? $siteRuntime['sourceIds'] : [];
+                    $sourceIds['forms'] = $projectSourceId;
+                    if (trim((string)($sourceIds['ecommerce'] ?? '')) === '') {
+                        $sourceIds['ecommerce'] = $projectSourceId;
+                    }
+                    if (trim((string)($sourceIds['system'] ?? '')) === '') {
+                        $sourceIds['system'] = $projectSourceId;
+                    }
+                    $siteRuntime['sourceIds'] = $sourceIds;
+                }
+                $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+                $integrationSettings['contractSync'] = [
+                    'version' => trim((string)($result['contractsVersion'] ?? '')),
+                    'syncedAt' => gmdate('c'),
+                    'mappingCount' => is_array($result['contractMappings'] ?? null) ? count((array)$result['contractMappings']) : 0,
+                ];
+                $runtimeState['integrationSettings'] = $integrationSettings;
+                $siteRuntime['integrationSettings'] = $integrationSettings;
+                $contractsSynced = true;
+
+                $plugin->getLogs()->log('info', 'Forms contracts synced to Burrow', 'settings', 'system', null, [
+                    'contractsCount' => $siteContractsCount,
+                    'contractsVersion' => trim((string)($result['contractsVersion'] ?? '')),
+                    'siteId' => $siteId,
+                ]);
+            }
+
+            if ($publishSnapshot) {
+                $siteRuntime['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
+                $snapshotResult = $plugin->getBurrowApi()->publishSystemSnapshot(
+                    $plugin->getBurrowBaseUrl(),
+                    $plugin->getBurrowApiKey(),
+                    $siteRuntime,
+                    $siteRuntime['lastSnapshot']
+                );
+                if (!empty($snapshotResult['ok'])) {
+                    $snapshotSynced = true;
+                    $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
+                    $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
+                    $systemJobs['snapshotLastRunAt'] = gmdate('c');
+                    $systemJobs['snapshotQueuedAt'] = '';
+                    $systemJobs['snapshotLastError'] = '';
+                    $integrationSettings['systemJobs'] = $systemJobs;
+                    $runtimeState['integrationSettings'] = $integrationSettings;
+                    $siteRuntime['integrationSettings'] = $integrationSettings;
+                } else {
+                    $lastSnapshotError = (string)($snapshotResult['error'] ?? '');
+                }
+            }
+
+            $stateService->saveSiteState($siteId, [
+                'enabled' => true,
+                'linked' => true,
+                'projectId' => (string)($siteRuntime['projectId'] ?? ''),
+                'clientId' => (string)($siteRuntime['clientId'] ?? ''),
+                'organizationId' => (string)($siteRuntime['organizationId'] ?? ''),
+                'projectSourceId' => (string)($siteRuntime['projectSourceId'] ?? ''),
+                'sourceIds' => (array)($siteRuntime['sourceIds'] ?? []),
+                'sdkState' => (array)($siteRuntime['sdkState'] ?? []),
+                'ingestionKey' => (array)($siteRuntime['ingestionKey'] ?? []),
+                'burrowProject' => (array)($siteRuntime['burrowProject'] ?? []),
+                'lastSnapshot' => (array)($siteRuntime['lastSnapshot'] ?? []),
+                'siteUrl' => (string)($siteRuntime['siteUrl'] ?? ''),
+            ], [
+                'selectedIntegrations' => (array)($runtimeState['selectedIntegrations'] ?? []),
+                'capabilities' => (array)($runtimeState['capabilities'] ?? []),
+                'integrationSettings' => (array)($runtimeState['integrationSettings'] ?? []),
+                'onboardingStep' => (string)($runtimeState['onboardingStep'] ?? 'connection'),
+                'onboardingCompleted' => (bool)($runtimeState['onboardingCompleted'] ?? false),
+                'connectionBaseUrl' => (string)($runtimeState['connectionBaseUrl'] ?? ''),
+                'connectionApiKey' => (string)($runtimeState['connectionApiKey'] ?? ''),
+            ]);
+
+            $anySiteOk = true;
+        }
+
+        $runtimeState = $stateService->getState();
+        // Preserve caller-provided install fields that may not yet be flushed if no site saved.
+        // getState() after saveSiteState is authoritative when anySiteOk.
+
+        if (!$anySiteOk) {
             return [
                 'ok' => false,
-                'error' => $missing !== []
-                    ? Craft::t('burrow', 'Burrow connection is not ready. Missing: {items}. Re-link the project if you recently rotated credentials.', [
-                        'items' => implode(', ', $missing),
-                    ])
+                'error' => $lastError !== ''
+                    ? $lastError
                     : Craft::t('burrow', 'Burrow connection is not ready. Check your linked project and credentials.'),
                 'runtimeState' => $runtimeState,
                 'relinked' => false,
@@ -169,160 +374,6 @@ class IntegrationsService extends Component
                 'snapshotSynced' => false,
                 'notice' => '',
             ];
-        }
-
-        $relinked = false;
-        if ($forceRelink) {
-            $selection = [
-                'organizationId' => trim((string)($runtimeState['organizationId'] ?? '')),
-                'clientId' => trim((string)($runtimeState['clientId'] ?? '')),
-                'projectId' => trim((string)($runtimeState['projectId'] ?? '')),
-            ];
-            if ($selection['projectId'] === '') {
-                return [
-                    'ok' => false,
-                    'error' => Craft::t('burrow', 'Project is not linked yet.'),
-                    'runtimeState' => $runtimeState,
-                    'relinked' => false,
-                    'contractsSynced' => false,
-                    'contractsCount' => 0,
-                    'snapshotSynced' => false,
-                    'notice' => '',
-                ];
-            }
-
-            $link = $plugin->getBurrowApi()->link(
-                $plugin->getBurrowBaseUrl(),
-                $plugin->getBurrowApiKey(),
-                $selection,
-                (array)($runtimeState['capabilities'] ?? []),
-                $runtimeState
-            );
-            if (!$link['ok']) {
-                $plugin->getLogs()->log('error', 'Project re-link failed during configuration sync', 'settings', 'system', null, [
-                    'error' => $link['error'],
-                ]);
-
-                return [
-                    'ok' => false,
-                    'error' => Craft::t('burrow', 'Project re-link failed: {error}', ['error' => $link['error']]),
-                    'runtimeState' => $runtimeState,
-                    'relinked' => false,
-                    'contractsSynced' => false,
-                    'contractsCount' => 0,
-                    'snapshotSynced' => false,
-                    'notice' => '',
-                ];
-            }
-
-            $runtimeState = $plugin->getBurrowApi()->applyLinkResult($runtimeState, $link);
-            $relinked = true;
-        }
-
-        $contracts = $this->buildFormsContracts($runtimeState);
-        $contractsSynced = false;
-        $contractsCount = count($contracts);
-
-        if ($contractsCount > 0) {
-            $result = $plugin->getBurrowApi()->submitFormsContracts(
-                $plugin->getBurrowBaseUrl(),
-                $plugin->getBurrowApiKey(),
-                $runtimeState,
-                $contracts
-            );
-            if (!$result['ok']) {
-                $plugin->getLogs()->log('error', 'Forms contract sync failed', 'settings', 'system', null, [
-                    'error' => $result['error'],
-                ]);
-
-                return [
-                    'ok' => false,
-                    'error' => Craft::t('burrow', 'Contract sync failed: {error}', ['error' => $result['error']]),
-                    'runtimeState' => $runtimeState,
-                    'relinked' => $relinked,
-                    'contractsSynced' => false,
-                    'contractsCount' => $contractsCount,
-                    'snapshotSynced' => false,
-                    'notice' => '',
-                ];
-            }
-
-            $runtimeState['sdkState'] = is_array($result['sdkState'] ?? null) ? $result['sdkState'] : (array)($runtimeState['sdkState'] ?? []);
-            $contractMappings = is_array($result['contractMappings'] ?? null) ? $result['contractMappings'] : [];
-            if ($contractMappings !== []) {
-                $runtimeState['sdkState']['contractMappings'] = $contractMappings;
-            }
-            $projectSourceId = trim((string)($result['projectSourceId'] ?? ''));
-            if ($projectSourceId !== '') {
-                $runtimeState['projectSourceId'] = $projectSourceId;
-                $sourceIds = is_array($runtimeState['sourceIds'] ?? null) ? $runtimeState['sourceIds'] : [];
-                $sourceIds['forms'] = $projectSourceId;
-                if (trim((string)($sourceIds['ecommerce'] ?? '')) === '') {
-                    $sourceIds['ecommerce'] = $projectSourceId;
-                }
-                if (trim((string)($sourceIds['system'] ?? '')) === '') {
-                    $sourceIds['system'] = $projectSourceId;
-                }
-                $runtimeState['sourceIds'] = $sourceIds;
-            }
-            $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
-            $integrationSettings['contractSync'] = [
-                'version' => trim((string)($result['contractsVersion'] ?? '')),
-                'syncedAt' => gmdate('c'),
-                'mappingCount' => is_array($result['contractMappings'] ?? null) ? count((array)$result['contractMappings']) : 0,
-            ];
-            $runtimeState['integrationSettings'] = $integrationSettings;
-            $contractsSynced = true;
-
-            $plugin->getLogs()->log('info', 'Forms contracts synced to Burrow', 'settings', 'system', null, [
-                'contractsCount' => $contractsCount,
-                'contractsVersion' => trim((string)($result['contractsVersion'] ?? '')),
-                'forms' => array_map(static function (array $contract): array {
-                    $customKeys = [];
-                    foreach ((array)($contract['fieldMappings'] ?? []) as $mapping) {
-                        if (!is_array($mapping)) {
-                            continue;
-                        }
-                        $key = trim((string)($mapping['canonicalKey'] ?? ''));
-                        if ($key === '' || in_array($key, ['submissionId', 'submittedAt', 'formId'], true)) {
-                            continue;
-                        }
-                        $customKeys[] = $key;
-                    }
-
-                    return [
-                        'provider' => trim((string)($contract['provider'] ?? '')),
-                        'externalFormId' => trim((string)($contract['externalFormId'] ?? '')),
-                        'contractId' => trim((string)($contract['contractId'] ?? '')),
-                        'fieldCount' => count($customKeys),
-                        'canonicalKeys' => $customKeys,
-                    ];
-                }, is_array($result['formsContracts'] ?? null) && $result['formsContracts'] !== []
-                    ? $result['formsContracts']
-                    : $contracts),
-            ]);
-        }
-
-        $snapshotSynced = false;
-        $snapshotResult = ['ok' => false, 'error' => ''];
-        if ($publishSnapshot) {
-            $runtimeState['lastSnapshot'] = $plugin->getSnapshot()->collectSnapshot();
-            $snapshotResult = $plugin->getBurrowApi()->publishSystemSnapshot(
-                $plugin->getBurrowBaseUrl(),
-                $plugin->getBurrowApiKey(),
-                $runtimeState,
-                $runtimeState['lastSnapshot']
-            );
-            $snapshotSynced = (bool)($snapshotResult['ok'] ?? false);
-            if ($snapshotSynced) {
-                $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null) ? $runtimeState['integrationSettings'] : [];
-                $systemJobs = is_array($integrationSettings['systemJobs'] ?? null) ? $integrationSettings['systemJobs'] : [];
-                $systemJobs['snapshotLastRunAt'] = gmdate('c');
-                $systemJobs['snapshotQueuedAt'] = '';
-                $systemJobs['snapshotLastError'] = '';
-                $integrationSettings['systemJobs'] = $systemJobs;
-                $runtimeState['integrationSettings'] = $integrationSettings;
-            }
         }
 
         if (!$contractsSynced && !$relinked && !$snapshotSynced) {
@@ -340,7 +391,7 @@ class IntegrationsService extends Component
 
         if ($publishSnapshot && !$snapshotSynced && ($contractsSynced || $relinked)) {
             $plugin->getLogs()->log('warning', 'Configuration synced but snapshot publish failed', 'settings', 'system', null, [
-                'error' => $snapshotResult['error'] ?? '',
+                'error' => $lastSnapshotError,
             ]);
 
             return [
@@ -352,7 +403,7 @@ class IntegrationsService extends Component
                 'contractsCount' => $contractsCount,
                 'snapshotSynced' => false,
                 'notice' => Craft::t('burrow', 'Configuration synced to Burrow. Snapshot sync pending: {error}', [
-                    'error' => (string)($snapshotResult['error'] ?? ''),
+                    'error' => $lastSnapshotError,
                 ]),
             ];
         }
@@ -362,28 +413,13 @@ class IntegrationsService extends Component
             'contractsSynced' => $contractsSynced,
             'contractsCount' => $contractsCount,
             'snapshotSynced' => $snapshotSynced,
+            'linkedSites' => count($linkedSites),
         ]);
 
         if ($contractsSynced) {
-            $mappingCount = 0;
-            foreach ($contracts as $contract) {
-                if (!is_array($contract['fieldMappings'] ?? null)) {
-                    continue;
-                }
-                foreach ((array)$contract['fieldMappings'] as $mapping) {
-                    if (!is_array($mapping)) {
-                        continue;
-                    }
-                    $key = trim((string)($mapping['canonicalKey'] ?? ''));
-                    if ($key === '' || in_array($key, ['submissionId', 'submittedAt', 'formId'], true)) {
-                        continue;
-                    }
-                    $mappingCount++;
-                }
-            }
-            $notice = Craft::t('burrow', 'Settings saved and synced to Burrow ({count} contract(s), {mappings} field mapping(s)).', [
+            $notice = Craft::t('burrow', 'Settings saved and synced to Burrow ({count} contract(s) across {sites} site(s)).', [
                 'count' => (string)$contractsCount,
-                'mappings' => (string)$mappingCount,
+                'sites' => (string)count($linkedSites),
             ]);
         } elseif ($relinked) {
             $notice = Craft::t('burrow', 'Settings saved and project capabilities updated in Burrow.');

@@ -241,8 +241,16 @@ class ShopifyTrackingService extends Component
     public function handleCollectedCartEvent(array $payload): array
     {
         $plugin = Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
-        if (!$this->isShopifyFunnelEnabled($runtimeState)) {
+        $siteId = 0;
+        try {
+            $siteId = (int)(\Craft::$app->getSites()->getCurrentSite()->id ?? 0);
+        } catch (\Throwable) {
+            $siteId = (int)(\Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+        }
+        $runtimeState = $siteId > 0
+            ? $plugin->getState()->getSiteState($siteId)
+            : $plugin->getState()->getState();
+        if (empty($runtimeState['enabled']) || !$this->isShopifyFunnelEnabled($runtimeState)) {
             return ['ok' => false, 'error' => 'not_enabled'];
         }
 
@@ -282,6 +290,13 @@ class ShopifyTrackingService extends Component
         if ($shopDomain !== '') {
             $envelope['tags'] = is_array($envelope['tags'] ?? null) ? $envelope['tags'] : [];
             $envelope['tags']['shopDomain'] = $shopDomain;
+        }
+        if ($siteId > 0) {
+            $envelope['_burrowSiteId'] = $siteId;
+        }
+        $projectId = trim((string)($runtimeState['projectId'] ?? ''));
+        if ($projectId !== '') {
+            $envelope['_burrowProjectId'] = $projectId;
         }
 
         $eventKey = 'shopify_' . (string)$payload['externalEventId'];

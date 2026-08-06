@@ -2,6 +2,7 @@
 namespace burrow\Burrow\services;
 
 use burrow\Burrow\integrations\forms\FormIntegrationAdapter;
+use Craft;
 use craft\base\Component;
 use yii\base\Event;
 
@@ -15,13 +16,21 @@ class FormTrackingService extends Component
         }
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $plugin->getState()->getState();
+        $submission = $normalized['submission'];
+        $siteId = $this->resolveSubmissionSiteId($submission);
+        $runtimeState = $plugin->getState()->getSiteState($siteId);
+        if (empty($runtimeState['enabled']) || trim((string)($runtimeState['projectId'] ?? '')) === '') {
+            return;
+        }
+        if (!$plugin->canDispatchToBurrow($runtimeState)) {
+            return;
+        }
+
         $configByFormId = $adapter->trackingConfigsByFormId($runtimeState);
         if ($configByFormId === []) {
             return;
         }
 
-        $submission = $normalized['submission'];
         $eventForm = $normalized['eventForm'] ?? null;
         $formId = $this->extractSubmissionFormId($submission);
         if ($formId <= 0 && is_object($eventForm)) {
@@ -49,6 +58,7 @@ class FormTrackingService extends Component
                 [
                     'formId' => $formId,
                     'submissionId' => $submissionId,
+                    'siteId' => $siteId,
                     'projectIdPresent' => trim((string)($runtimeState['projectId'] ?? '')) !== '',
                     'formsSourceIdPresent' => $resolvedFormsSource !== '',
                 ]
@@ -57,10 +67,55 @@ class FormTrackingService extends Component
             return;
         }
 
+        $eventEnvelope['_burrowSiteId'] = $siteId;
+        $eventEnvelope['_burrowProjectId'] = (string)($runtimeState['projectId'] ?? '');
+
         $this->publishAndTrackRealtimeEvent($eventEnvelope, $runtimeState, $adapter->getId(), [
             'formId' => (string)$formId,
             'submissionId' => $submissionId,
+            'siteId' => (string)$siteId,
         ]);
+    }
+
+    /**
+     * Resolves the Craft site ID for a form submission.
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.4.0
+     */
+    public function resolveSubmissionSiteId(object $submission): int
+    {
+        foreach (['getSiteId'] as $method) {
+            if (method_exists($submission, $method)) {
+                try {
+                    $value = $submission->{$method}();
+                    if (is_numeric($value) && (int)$value > 0) {
+                        return (int)$value;
+                    }
+                } catch (\Throwable) {
+                }
+            }
+        }
+
+        foreach (['siteId'] as $prop) {
+            try {
+                $value = $submission->{$prop} ?? null;
+                if (is_numeric($value) && (int)$value > 0) {
+                    return (int)$value;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        try {
+            $current = Craft::$app->getSites()->getCurrentSite();
+            if ($current !== null && (int)$current->id > 0) {
+                return (int)$current->id;
+            }
+        } catch (\Throwable) {
+        }
+
+        return (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
     }
 
     /**

@@ -4,6 +4,18 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Multi-site support (Phase 1):** one Burrow project per Craft site, with a retained install-level organization API key for linking additional sites. Runtime state stores per-site routing and ingestion keys in `siteStates`; outbox rows capture `project_id` / `site_id` at enqueue time; forms/commerce/collect and stack-snapshot auth resolve the Craft site’s linked project.
+
+### Changed
+
+- `schemaVersion` bumped from `5.3.0` to `5.4.0` (`m260806_000005_add_multisite_state_and_outbox_routing`). Package version remains independent (next release after 5.4.1).
+- Organization API key is no longer cleared after project link (single-site and multi-site).
+- Internal `_burrowSiteId` / `_burrowProjectId` markers are stripped before event publish so they never reach Burrow.
+
 ## [5.4.1] - 2026-08-06
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

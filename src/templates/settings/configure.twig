@@ -179,7 +179,7 @@
             {% endif %}
 
         {% elseif section == 'connection' %}
-            <p class="burrow-muted">{{ 'Connection details for your linked Burrow project. Use the setup wizard to change the linked project or re-authenticate.'|t('burrow') }}</p>
+            <p class="burrow-muted">{{ 'Install-level Burrow connection and per-site project links. Re-link repairs a single Craft site without disturbing others.'|t('burrow') }}</p>
 
             <table class="data fullwidth" style="max-width:720px; margin-top: 16px;">
                 <tbody>
@@ -201,6 +201,33 @@
                 </tr>
                 </tbody>
             </table>
+
+            {% set linkedSiteStates = state.siteStates ?? {} %}
+            {% if linkedSiteStates %}
+                <h3 style="margin-top: 20px;">{{ 'Linked Craft sites'|t('burrow') }}</h3>
+                <table class="data fullwidth" style="max-width:720px;">
+                    <thead>
+                    <tr>
+                        <th>{{ 'Site'|t('burrow') }}</th>
+                        <th>{{ 'Project'|t('burrow') }}</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for siteKey, siteState in linkedSiteStates %}
+                        {% if siteState.enabled and siteState.projectId %}
+                            <tr>
+                                <td>{{ siteState.siteHandle ?: siteKey }}</td>
+                                <td><code>{{ siteState.projectId }}</code></td>
+                                <td>
+                                    <a href="{{ cpUrl('burrow/setup', { step: 'connection', relink: '1', craftSiteId: siteKey }) }}">{{ 'Re-link'|t('burrow') }}</a>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
 
             <div class="burrow-settings-links">
                 <a class="btn" href="{{ cpUrl('burrow/setup', { step: 'connection', relink: '1' }) }}">{{ 'Re-link Project'|t('burrow') }}</a>

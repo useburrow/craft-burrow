@@ -430,14 +430,14 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
 
     /**
      * @param array<string,mixed> $runtimeState
-     * @return array{events: array<int, array<string, mixed>>, nextOffset: int, exhausted: bool}
+     * @return array{events: array<int, array<string, mixed>>, nextCursor: int, exhausted: bool}
      */
-    public function fetchBackfillPage(array $runtimeState, string $windowStart, int $offset, int $batchSize): array
+    public function fetchBackfillPage(array $runtimeState, string $windowStart, int $cursor, int $batchSize): array
     {
         $events = [];
         $ctx = $this->prepareBackfillContext($runtimeState);
         if ($ctx === null) {
-            return ['events' => [], 'nextOffset' => 0, 'exhausted' => true];
+            return ['events' => [], 'nextCursor' => 0, 'exhausted' => true];
         }
 
         /** @var class-string<\craft\base\ElementInterface> $submissionClass */
@@ -445,27 +445,40 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
         $enabledFormIdMap = $ctx['enabledFormIdMap'];
         $formNames = $ctx['formNames'];
         $formConfigsById = $ctx['formConfigsById'];
+        $formIds = array_map('intval', array_keys($enabledFormIdMap));
+        if ($formIds === []) {
+            return ['events' => [], 'nextCursor' => 0, 'exhausted' => true];
+        }
         $windowStartTs = strtotime($windowStart) ?: 0;
 
         try {
-            $rows = $submissionClass::find()
+            $query = $submissionClass::find()
                 ->status(null)
                 ->site('*')
-                ->orderBy(['dateCreated' => SORT_DESC])
-                ->limit($batchSize)
-                ->offset($offset)
-                ->all();
+                ->unique()
+                ->formId($formIds)
+                ->dateCreated('>= ' . $windowStart)
+                ->orderBy(['elements.id' => SORT_DESC])
+                ->limit($batchSize);
+            if ($cursor > 0) {
+                $query->andWhere(['<', 'elements.id', $cursor]);
+            }
+            $rows = $query->all();
         } catch (\Throwable) {
-            return ['events' => [], 'nextOffset' => $offset, 'exhausted' => true];
+            return ['events' => [], 'nextCursor' => $cursor, 'exhausted' => true];
         }
         if ($rows === []) {
-            return ['events' => [], 'nextOffset' => $offset, 'exhausted' => true];
+            return ['events' => [], 'nextCursor' => $cursor, 'exhausted' => true];
         }
 
-        $oldestTsInBatch = \PHP_INT_MAX;
+        $nextCursor = $cursor;
         foreach ($rows as $row) {
             if (!is_object($row)) {
                 continue;
+            }
+            $rowId = (int)($row->id ?? 0);
+            if ($rowId > 0) {
+                $nextCursor = $rowId;
             }
             $formId = $this->extractSubmissionFormId($row);
             if ($formId <= 0 || !isset($enabledFormIdMap[$formId])) {
@@ -475,9 +488,7 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
             if ($timestamp === '') {
                 continue;
             }
-            $submittedTs = strtotime($timestamp) ?: 0;
-            $oldestTsInBatch = min($oldestTsInBatch, $submittedTs);
-            if ($submittedTs < $windowStartTs) {
+            if ((strtotime($timestamp) ?: 0) < $windowStartTs) {
                 continue;
             }
 
@@ -491,12 +502,13 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
                 $events[] = $event;
             }
         }
+        $rowCount = count($rows);
         unset($rows);
 
         return [
             'events' => $events,
-            'nextOffset' => $offset + $batchSize,
-            'exhausted' => $oldestTsInBatch < $windowStartTs,
+            'nextCursor' => $nextCursor,
+            'exhausted' => $rowCount < $batchSize,
         ];
     }
 

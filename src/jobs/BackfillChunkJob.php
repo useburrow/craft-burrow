@@ -3,11 +3,19 @@ namespace burrow\Burrow\jobs;
 
 use Craft;
 use burrow\Burrow\Plugin;
+use craft\helpers\Queue as QueueHelper;
 use craft\queue\BaseJob;
 use yii\queue\Queue;
 
 class BackfillChunkJob extends BaseJob
 {
+    /**
+     * Explicit reserve time, comfortably above the chunk's wall-clock budget
+     * ({@see \burrow\Burrow\services\BackfillService::CHUNK_TIME_BUDGET_SECONDS}) so slow
+     * submit batches never outlive the queue reservation.
+     */
+    public const TTR = 600;
+
     protected function defaultDescription(): ?string
     {
         return Craft::t('burrow', 'Process Burrow historical backfill (chunk)');
@@ -76,6 +84,7 @@ class BackfillChunkJob extends BaseJob
                 $plugin->getLogs()->log('error', 'Backfill failed', 'backfill', 'system', null, [
                     'error' => $chunk['error'],
                 ]);
+                QueueHelper::push(new SyncOutboxElementIndexJob(), null, 0, SyncOutboxElementIndexJob::TTR);
 
                 return;
             }
@@ -114,6 +123,9 @@ class BackfillChunkJob extends BaseJob
                     ]);
                 }
 
+                // Bulk backfill sends skip per-row CP element saves; reconcile the element index now.
+                QueueHelper::push(new SyncOutboxElementIndexJob(), null, 0, SyncOutboxElementIndexJob::TTR);
+
                 return;
             }
 
@@ -121,7 +133,7 @@ class BackfillChunkJob extends BaseJob
             $runtimeState['integrationSettings'] = $integrationSettings;
             $plugin->getState()->saveState($runtimeState);
 
-            Craft::$app->getQueue()->push(new BackfillChunkJob());
+            QueueHelper::push(new BackfillChunkJob(), null, 0, self::TTR);
         } finally {
             $plugin->getQueue()->flushDeferredOutboxElementSearchIndex();
         }

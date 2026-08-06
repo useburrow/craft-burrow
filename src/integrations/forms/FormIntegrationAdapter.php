@@ -84,10 +84,14 @@ interface FormIntegrationAdapter
     public function prepareBackfillContext(array $runtimeState): ?array;
 
     /**
+     * Fetches one page of backfill events, newest first. $cursor is the element id lower bound from
+     * the previous page's nextCursor (0 starts from the newest element); id-based cursors stay stable
+     * while new submissions arrive, unlike OFFSET pagination.
+     *
      * @param array<string,mixed> $runtimeState
-     * @return array{events: array<int, array<string, mixed>>, nextOffset: int, exhausted: bool}
+     * @return array{events: array<int, array<string, mixed>>, nextCursor: int, exhausted: bool}
      */
-    public function fetchBackfillPage(array $runtimeState, string $windowStart, int $offset, int $batchSize): array;
+    public function fetchBackfillPage(array $runtimeState, string $windowStart, int $cursor, int $batchSize): array;
 
     /**
      * @return array<string, mixed>

@@ -4,6 +4,21 @@ All notable changes to `useburrow/craft-burrow` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.4.1] - 2026-08-06
+
+No database schema changes; `schemaVersion` remains `5.3.0`.
+
+### Fixed
+
+- **Backfill queue timeouts:** backfill chunk jobs no longer die at Craft's default 300-second queue reservation on large datasets. Each chunk now runs against a 120-second wall-clock budget and exits early with its checkpoint (the next queued job resumes where it left off), and `BackfillChunkJob` is pushed with an explicit 600-second TTR so a slow submit batch can never outlive its reservation.
+- **Commerce backfill:** restored `fetchEcommerceBackfillPage()` and its helper methods, which were accidentally deleted in the adapter-registry refactor while still being called — any backfill reaching the ecommerce phase (and the backfill debug probe) threw `UnknownMethodException`.
+
+### Changed
+
+- **Bulk backfill bookkeeping:** successful backfill events are now recorded with one batched insert into the outbox and sent index per submit batch instead of a per-event transaction + CP element save, and duplicate checks run as one query per page instead of one per event — cutting chunk time by an order of magnitude. CP outbox element rows for bulk-sent records are reconciled by a new time-budgeted `SyncOutboxElementIndexJob` queued when the backfill finishes; failed rows are still recorded per-event immediately.
+- **Backfill queries:** form-submission and Commerce order pages now filter by enabled form IDs and the backfill window in SQL and paginate with a stable element-id cursor instead of `OFFSET`, so pages stay constant-cost on large tables and aren't shifted by submissions arriving mid-backfill. An in-flight backfill from an earlier version restarts its current phase; already-delivered events are skipped by the dedupe index.
+- **Crash resilience:** the backfill checkpoint (with live progress counters) is persisted after every successful submit batch, so a killed queue worker re-reads at most one page on resume instead of redoing the whole chunk.
+
 ## [5.4.0] - 2026-07-30
 
 No database schema changes; `schemaVersion` remains `5.3.0`.

@@ -172,6 +172,212 @@ class QueueService extends Component
         return $result !== false && $result !== null;
     }
 
+    /**
+     * Batched {@see wasSent()}: returns the subset of $eventKeys already recorded in the sent index.
+     *
+     * @param array<int,string> $eventKeys
+     * @return array<string,true>
+     */
+    public function sentKeysAmong(array $eventKeys): array
+    {
+        $keys = [];
+        foreach ($eventKeys as $key) {
+            $key = trim((string)$key);
+            if ($key !== '') {
+                $keys[$key] = true;
+            }
+        }
+        if ($keys === []) {
+            return [];
+        }
+        try {
+            $found = (new Query())
+                ->select('event_key')
+                ->from('{{%burrow_outbox_sent}}')
+                ->where(['event_key' => array_keys($keys)])
+                ->column();
+        } catch (\Throwable) {
+            return [];
+        }
+        $result = [];
+        foreach ($found as $key) {
+            $result[(string)$key] = true;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Bulk success path for backfill: one batch insert into the outbox and sent index instead of a
+     * per-event transaction + element save. CP element rows are reconciled afterwards by
+     * {@see \burrow\Burrow\jobs\SyncOutboxElementIndexJob}.
+     *
+     * @param list<array{eventKey:string,payload:array<string,mixed>,channel:string,eventName:string}> $records
+     */
+    public function markSentBatch(array $records): bool
+    {
+        $byKey = [];
+        foreach ($records as $record) {
+            $key = trim((string)($record['eventKey'] ?? ''));
+            if ($key !== '') {
+                $byKey[$key] = $record;
+            }
+        }
+        if ($byKey === []) {
+            return true;
+        }
+
+        $db = Craft::$app->getDb();
+        $now = gmdate('Y-m-d H:i:s');
+
+        try {
+            $existingKeys = (new Query())
+                ->select('event_key')
+                ->from('{{%burrow_outbox}}')
+                ->where(['event_key' => array_keys($byKey)])
+                ->column($db);
+        } catch (\Throwable) {
+            $existingKeys = null;
+        }
+        if ($existingKeys === null) {
+            $ok = true;
+            foreach ($byKey as $key => $record) {
+                $ok = $this->markSent($key, (array)($record['payload'] ?? []), (string)($record['channel'] ?? ''), (string)($record['eventName'] ?? '')) && $ok;
+            }
+
+            return $ok;
+        }
+
+        $ok = true;
+        foreach ($existingKeys as $key) {
+            $key = (string)$key;
+            $record = $byKey[$key] ?? null;
+            unset($byKey[$key]);
+            if ($record === null) {
+                continue;
+            }
+            // A row with this key already exists (e.g. a prior failed attempt); reuse the upsert
+            // path so attempt counts and the CP element stay accurate.
+            $ok = $this->markSent($key, (array)($record['payload'] ?? []), (string)($record['channel'] ?? ''), (string)($record['eventName'] ?? '')) && $ok;
+        }
+        if ($byKey === []) {
+            return $ok;
+        }
+
+        $rows = [];
+        foreach ($byKey as $key => $record) {
+            $rows[] = [
+                bin2hex(random_bytes(16)),
+                $key,
+                trim((string)($record['channel'] ?? '')) ?: null,
+                trim((string)($record['eventName'] ?? '')) ?: null,
+                'sent',
+                1,
+                self::DEFAULT_MAX_ATTEMPTS,
+                (array)($record['payload'] ?? []),
+                null,
+                null,
+                $now,
+                $now,
+                $now,
+            ];
+        }
+        try {
+            $db->createCommand()->batchInsert('{{%burrow_outbox}}', [
+                'id',
+                'event_key',
+                'channel',
+                'event_name',
+                'status',
+                'attempt_count',
+                'max_attempts',
+                'payload',
+                'last_error',
+                'next_attempt_at',
+                'sent_at',
+                'created_at',
+                'updated_at',
+            ], $rows)->execute();
+        } catch (\Throwable) {
+            foreach ($byKey as $key => $record) {
+                $ok = $this->markSent($key, (array)($record['payload'] ?? []), (string)($record['channel'] ?? ''), (string)($record['eventName'] ?? '')) && $ok;
+            }
+
+            return $ok;
+        }
+
+        try {
+            $alreadyIndexed = (new Query())
+                ->select('event_key')
+                ->from('{{%burrow_outbox_sent}}')
+                ->where(['event_key' => array_keys($byKey)])
+                ->column($db);
+            $alreadyIndexed = array_flip(array_map('strval', $alreadyIndexed));
+            $sentRows = [];
+            foreach (array_keys($byKey) as $key) {
+                if (!isset($alreadyIndexed[$key])) {
+                    $sentRows[] = [$key, $now];
+                }
+            }
+            if ($sentRows !== []) {
+                $db->createCommand()->batchInsert('{{%burrow_outbox_sent}}', ['event_key', 'sent_at'], $sentRows)->execute();
+            }
+        } catch (\Throwable) {
+            // Outbox rows already reflect send status; keep best-effort sent-index write.
+        }
+
+        return $ok;
+    }
+
+    /**
+     * Creates CP element rows for outbox records that don't have one yet (bulk backfill sends skip
+     * per-row element saves). Returns how many were synced and how many still remain.
+     *
+     * @return array{synced:int,remaining:int}
+     */
+    public function syncElementIndexBatch(int $limit = 200): array
+    {
+        if (!$this->outboxElementTableExists()) {
+            return ['synced' => 0, 'remaining' => 0];
+        }
+        try {
+            $ids = Craft::$app->getDb()->createCommand(
+                'SELECT o.id
+                 FROM {{%burrow_outbox}} o
+                 LEFT JOIN {{%burrow_outbox_elements}} e ON e.outboxId = o.id
+                 WHERE e.outboxId IS NULL
+                 ORDER BY o.created_at DESC
+                 LIMIT :limit',
+                [':limit' => max(1, $limit)]
+            )->queryColumn();
+        } catch (\Throwable) {
+            return ['synced' => 0, 'remaining' => 0];
+        }
+
+        $synced = 0;
+        foreach ($ids as $id) {
+            $id = trim((string)$id);
+            if ($id === '') {
+                continue;
+            }
+            $this->syncElementIndexRecordByOutboxId($id);
+            $synced++;
+        }
+
+        try {
+            $remaining = (int)Craft::$app->getDb()->createCommand(
+                'SELECT COUNT(*)
+                 FROM {{%burrow_outbox}} o
+                 LEFT JOIN {{%burrow_outbox_elements}} e ON e.outboxId = o.id
+                 WHERE e.outboxId IS NULL'
+            )->queryScalar();
+        } catch (\Throwable) {
+            $remaining = 0;
+        }
+
+        return ['synced' => $synced, 'remaining' => $remaining];
+    }
+
     public function retryNow(string $id): bool
     {
         $ok = (bool)Craft::$app->getDb()->createCommand()->update(

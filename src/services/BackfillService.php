@@ -10,36 +10,11 @@ class BackfillService extends Component
 
     private const BACKFILL_SUBMIT_CHUNK = 400;
 
-    /** Max element query pages processed per queue job (each page is {@see BACKFILL_QUERY_BATCH} rows). */
-    private const BACKFILL_JOB_MAX_PAGES = 25;
+    /** Wall-clock budget per queue job; keeps each chunk safely under the queue TTR. */
+    private const CHUNK_TIME_BUDGET_SECONDS = 120;
 
-    /**
-     * @param array<string,mixed> $runtimeState
-     * @param array<int,string> $sources
-     * @return array{ok:bool,error:string,windowStart:string,windowEnd:string,sources:array<int,string>,requested:int,accepted:int,rejected:int,validationRejected:int,latestCursor:string,breakdown:array<string,int>}
-     */
-    public function runBackfill(array $runtimeState, string $windowPreset, array $sources): array
-    {
-        $checkpoint = $this->createInitialCheckpoint($runtimeState, $windowPreset, $sources);
-        if ($checkpoint === null) {
-            $normalizedSources = $this->normalizeSources($sources);
-            if ($normalizedSources === []) {
-                return $this->errorResult('Choose at least one source for backfill.');
-            }
-
-            return $this->errorResult('No backfill source is available for the selected integrations.');
-        }
-        while (true) {
-            $chunk = $this->runBackfillChunk($runtimeState, $checkpoint);
-            if (!$chunk['ok']) {
-                return $this->buildChunkFailureResult($checkpoint, $chunk['error'], (array)($checkpoint['sources'] ?? []));
-            }
-            $checkpoint = $chunk['checkpoint'];
-            if ($chunk['done']) {
-                return $this->completeBackfillFromCheckpoint($runtimeState, $checkpoint);
-            }
-        }
-    }
+    /** Safety backstop on pages per job; the time budget is the primary bound. */
+    private const BACKFILL_JOB_MAX_PAGES = 100;
 
     /**
      * @param array<int,string> $sources
@@ -60,7 +35,7 @@ class BackfillService extends Component
 
         return [
             'phase' => $phase,
-            'offset' => 0,
+            'cursor' => 0,
             'windowStart' => $windowStart,
             'windowEnd' => $windowEnd,
             'windowPreset' => trim($windowPreset),
@@ -79,7 +54,9 @@ class BackfillService extends Component
     }
 
     /**
-     * Processes up to {@see BACKFILL_JOB_MAX_PAGES} query pages for the current phase, then returns.
+     * Processes query pages for the current phase until the wall-clock budget
+     * ({@see CHUNK_TIME_BUDGET_SECONDS}) or the page backstop ({@see BACKFILL_JOB_MAX_PAGES})
+     * is reached, then returns the updated checkpoint for the next queue job.
      *
      * @param array<string,mixed> $runtimeState
      * @param array<string,mixed> $checkpoint
@@ -91,13 +68,14 @@ class BackfillService extends Component
         $sources = $this->normalizeSources((array)($checkpoint['sources'] ?? []));
 
         $phase = (string)($checkpoint['phase'] ?? 'complete');
-        $offset = (int)($checkpoint['offset'] ?? 0);
+        $cursor = (int)($checkpoint['cursor'] ?? 0);
         $windowStart = (string)($checkpoint['windowStart'] ?? '');
         $windowEnd = (string)($checkpoint['windowEnd'] ?? '');
 
         $pendingKeys = [];
         $pendingEvents = [];
         $pagesThisJob = 0;
+        $deadline = microtime(true) + self::CHUNK_TIME_BUDGET_SECONDS;
 
         $flushPending = function () use (
             $plugin,
@@ -106,7 +84,9 @@ class BackfillService extends Component
             $windowEnd,
             &$pendingKeys,
             &$pendingEvents,
-            &$checkpoint
+            &$checkpoint,
+            &$phase,
+            &$cursor
         ): bool {
             if ($pendingEvents === []) {
                 return true;
@@ -147,31 +127,48 @@ class BackfillService extends Component
             $checkpoint['accepted'] = (int)($checkpoint['accepted'] ?? 0) + (int)($sdkResult['acceptedCount'] ?? 0);
             $checkpoint['rejected'] = (int)($checkpoint['rejected'] ?? 0) + (int)($sdkResult['rejectedCount'] ?? 0);
             $checkpoint['validationRejected'] = (int)($checkpoint['validationRejected'] ?? 0) + (int)($sdkResult['validationRejectedCount'] ?? 0);
-            $cursor = trim((string)($sdkResult['latestCursor'] ?? ''));
-            if ($cursor !== '') {
-                $checkpoint['latestCursor'] = $cursor;
+            $latestCursor = trim((string)($sdkResult['latestCursor'] ?? ''));
+            if ($latestCursor !== '') {
+                $checkpoint['latestCursor'] = $latestCursor;
             }
+
+            // Events flushed so far are recorded in the sent index, so resuming from this
+            // checkpoint re-reads at most one page and skips them as duplicates.
+            $checkpoint['phase'] = $phase;
+            $checkpoint['cursor'] = $cursor;
+            $this->persistCheckpoint($checkpoint);
 
             return true;
         };
 
-        $appendEvent = function (array $event) use ($plugin, &$checkpoint, &$pendingKeys, &$pendingEvents, &$flushPending): bool {
-            $channel = (string)($event['channel'] ?? '');
-            if ($channel === 'forms') {
-                $checkpoint['breakdown']['forms'] = (int)($checkpoint['breakdown']['forms'] ?? 0) + 1;
-            } elseif ($channel === 'ecommerce') {
-                $checkpoint['breakdown']['ecommerce'] = (int)($checkpoint['breakdown']['ecommerce'] ?? 0) + 1;
+        $appendPageEvents = function (array $pageEvents) use ($plugin, &$checkpoint, &$pendingKeys, &$pendingEvents, &$flushPending): bool {
+            $keyed = [];
+            foreach ($pageEvents as $event) {
+                if (!is_array($event) || $event === []) {
+                    continue;
+                }
+                $channel = (string)($event['channel'] ?? '');
+                if ($channel === 'forms') {
+                    $checkpoint['breakdown']['forms'] = (int)($checkpoint['breakdown']['forms'] ?? 0) + 1;
+                } elseif ($channel === 'ecommerce') {
+                    $checkpoint['breakdown']['ecommerce'] = (int)($checkpoint['breakdown']['ecommerce'] ?? 0) + 1;
+                }
+                $keyed[] = [$this->buildBackfillEventKey($event), $event];
             }
-            $eventKey = $this->buildBackfillEventKey($event);
-            if ($plugin->getQueue()->wasSent($eventKey)) {
-                $checkpoint['skippedDuplicates'] = (int)($checkpoint['skippedDuplicates'] ?? 0) + 1;
-
+            if ($keyed === []) {
                 return true;
             }
-            $pendingKeys[] = $eventKey;
-            $pendingEvents[] = $event;
-            if (count($pendingEvents) >= self::BACKFILL_SUBMIT_CHUNK) {
-                return $flushPending();
+            $sentKeys = $plugin->getQueue()->sentKeysAmong(array_map(static fn (array $pair): string => $pair[0], $keyed));
+            foreach ($keyed as [$eventKey, $event]) {
+                if (isset($sentKeys[$eventKey])) {
+                    $checkpoint['skippedDuplicates'] = (int)($checkpoint['skippedDuplicates'] ?? 0) + 1;
+                    continue;
+                }
+                $pendingKeys[] = $eventKey;
+                $pendingEvents[] = $event;
+                if (count($pendingEvents) >= self::BACKFILL_SUBMIT_CHUNK && !$flushPending()) {
+                    return false;
+                }
             }
 
             return true;
@@ -179,6 +176,9 @@ class BackfillService extends Component
 
         $done = false;
         while ($pagesThisJob < self::BACKFILL_JOB_MAX_PAGES && !$done) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
             if ($phase === 'complete') {
                 $done = true;
                 break;
@@ -186,24 +186,22 @@ class BackfillService extends Component
 
             $formAdapter = $this->getFormAdapterForPhase($phase);
             if ($formAdapter !== null) {
-                $page = $formAdapter->fetchBackfillPage($runtimeState, $windowStart, $offset, self::BACKFILL_QUERY_BATCH);
-                foreach ($page['events'] as $event) {
-                    if (is_array($event) && !$appendEvent($event)) {
-                        $checkpoint['phase'] = $phase;
-                        $checkpoint['offset'] = $offset;
+                $page = $formAdapter->fetchBackfillPage($runtimeState, $windowStart, $cursor, self::BACKFILL_QUERY_BATCH);
+                if (!$appendPageEvents($page['events'])) {
+                    $checkpoint['phase'] = $phase;
+                    $checkpoint['cursor'] = $cursor;
 
-                        return [
-                            'ok' => false,
-                            'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
-                            'done' => false,
-                            'checkpoint' => $checkpoint,
-                        ];
-                    }
+                    return [
+                        'ok' => false,
+                        'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
+                        'done' => false,
+                        'checkpoint' => $checkpoint,
+                    ];
                 }
-                $offset = $page['nextOffset'];
+                $cursor = (int)$page['nextCursor'];
                 if ($page['exhausted']) {
                     $phase = $this->advancePhaseAfterExhaustion($runtimeState, $sources, $phase);
-                    $offset = 0;
+                    $cursor = 0;
                     if ($phase === 'complete') {
                         $done = true;
                     }
@@ -214,21 +212,19 @@ class BackfillService extends Component
             }
 
             if ($phase === 'ecommerce') {
-                $page = $this->fetchEcommerceBackfillPage($runtimeState, $windowStart, $offset);
-                foreach ($page['events'] as $event) {
-                    if (is_array($event) && !$appendEvent($event)) {
-                        $checkpoint['phase'] = $phase;
-                        $checkpoint['offset'] = $offset;
+                $page = $this->fetchEcommerceBackfillPage($runtimeState, $windowStart, $cursor);
+                if (!$appendPageEvents($page['events'])) {
+                    $checkpoint['phase'] = $phase;
+                    $checkpoint['cursor'] = $cursor;
 
-                        return [
-                            'ok' => false,
-                            'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
-                            'done' => false,
-                            'checkpoint' => $checkpoint,
-                        ];
-                    }
+                    return [
+                        'ok' => false,
+                        'error' => 'Backfill submit failed mid-run. Earlier chunks may have been accepted.',
+                        'done' => false,
+                        'checkpoint' => $checkpoint,
+                    ];
                 }
-                $offset = $page['nextOffset'];
+                $cursor = (int)$page['nextCursor'];
                 if ($page['exhausted']) {
                     $phase = 'complete';
                     $done = true;
@@ -244,7 +240,7 @@ class BackfillService extends Component
 
         if (!$flushPending()) {
             $checkpoint['phase'] = $phase;
-            $checkpoint['offset'] = $offset;
+            $checkpoint['cursor'] = $cursor;
 
             return [
                 'ok' => false,
@@ -255,7 +251,7 @@ class BackfillService extends Component
         }
 
         $checkpoint['phase'] = $phase;
-        $checkpoint['offset'] = $offset;
+        $checkpoint['cursor'] = $cursor;
 
         return [
             'ok' => true,
@@ -263,6 +259,38 @@ class BackfillService extends Component
             'done' => $phase === 'complete',
             'checkpoint' => $checkpoint,
         ];
+    }
+
+    /**
+     * Best-effort mid-chunk checkpoint save so a killed job resumes from the last flushed
+     * submit batch instead of redoing the whole chunk. Only writes while the backfill is
+     * still active to avoid resurrecting a cancelled or failed run.
+     *
+     * @param array<string,mixed> $checkpoint
+     */
+    private function persistCheckpoint(array $checkpoint): void
+    {
+        try {
+            $plugin = \burrow\Burrow\Plugin::getInstance();
+            $state = $plugin->getState()->getState();
+            $integrationSettings = is_array($state['integrationSettings'] ?? null) ? $state['integrationSettings'] : [];
+            $backfill = is_array($integrationSettings['backfill'] ?? null) ? $integrationSettings['backfill'] : [];
+            $status = (string)($backfill['status'] ?? '');
+            if ($status !== 'queued' && $status !== 'running') {
+                return;
+            }
+            $backfill['checkpoint'] = $checkpoint;
+            $backfill['requested'] = (int)($checkpoint['requested'] ?? 0);
+            $backfill['accepted'] = (int)($checkpoint['accepted'] ?? 0) + (int)($checkpoint['skippedDuplicates'] ?? 0);
+            $backfill['rejected'] = (int)($checkpoint['rejected'] ?? 0);
+            $backfill['validationRejected'] = (int)($checkpoint['validationRejected'] ?? 0);
+            $backfill['breakdown'] = is_array($checkpoint['breakdown'] ?? null) ? $checkpoint['breakdown'] : ['forms' => 0, 'ecommerce' => 0];
+            $integrationSettings['backfill'] = $backfill;
+            $state['integrationSettings'] = $integrationSettings;
+            $plugin->getState()->saveState($state);
+        } catch (\Throwable) {
+            // Mid-chunk persistence is an optimization; the job saves the checkpoint when the chunk ends.
+        }
     }
 
     /**
@@ -350,32 +378,6 @@ class BackfillService extends Component
             'requested' => $requested,
             'accepted' => $accepted + $skippedDuplicates,
             'rejected' => $rejected,
-            'validationRejected' => (int)($checkpoint['validationRejected'] ?? 0),
-            'latestCursor' => (string)($checkpoint['latestCursor'] ?? ''),
-            'breakdown' => $breakdown,
-        ];
-    }
-
-    /**
-     * @param array<string,mixed> $checkpoint
-     * @param array<int,string> $sources
-     * @return array{ok:bool,error:string,windowStart:string,windowEnd:string,sources:array<int,string>,requested:int,accepted:int,rejected:int,validationRejected:int,latestCursor:string,breakdown:array<string,int>}
-     */
-    private function buildChunkFailureResult(array $checkpoint, string $error, array $sources): array
-    {
-        $breakdown = is_array($checkpoint['breakdown'] ?? null) ? $checkpoint['breakdown'] : ['forms' => 0, 'ecommerce' => 0];
-        $skippedDuplicates = (int)($checkpoint['skippedDuplicates'] ?? 0);
-        $accepted = (int)($checkpoint['accepted'] ?? 0);
-
-        return [
-            'ok' => false,
-            'error' => $error,
-            'windowStart' => (string)($checkpoint['windowStart'] ?? ''),
-            'windowEnd' => (string)($checkpoint['windowEnd'] ?? ''),
-            'sources' => $sources,
-            'requested' => (int)($checkpoint['requested'] ?? 0),
-            'accepted' => $accepted + $skippedDuplicates,
-            'rejected' => (int)($checkpoint['rejected'] ?? 0),
             'validationRejected' => (int)($checkpoint['validationRejected'] ?? 0),
             'latestCursor' => (string)($checkpoint['latestCursor'] ?? ''),
             'breakdown' => $breakdown,
@@ -538,38 +540,6 @@ class BackfillService extends Component
         return array_values(array_unique($normalized));
     }
 
-    /**
-     * @param array<string,mixed> $runtimeState
-     * @return \Generator<int, array<string, mixed>>
-     */
-    private function iterateFormsBackfillEvents(array $runtimeState, string $windowStart): \Generator
-    {
-        foreach ($this->formAdapters() as $adapter) {
-            yield from $this->iterateAdapterSubmissionEvents($adapter, $runtimeState, $windowStart);
-        }
-    }
-
-    /**
-     * @return \Generator<int, array<string, mixed>>
-     */
-    private function iterateAdapterSubmissionEvents(
-        \burrow\Burrow\integrations\forms\FormIntegrationAdapter $adapter,
-        array $runtimeState,
-        string $windowStart
-    ): \Generator {
-        $offset = 0;
-        while (true) {
-            $page = $adapter->fetchBackfillPage($runtimeState, $windowStart, $offset, self::BACKFILL_QUERY_BATCH);
-            foreach ($page['events'] as $event) {
-                yield $event;
-            }
-            if ($page['exhausted']) {
-                return;
-            }
-            $offset = $page['nextOffset'];
-        }
-    }
-
     private function countFormsBackfillEvents(array $runtimeState, string $windowStart): int
     {
         $total = 0;
@@ -634,6 +604,405 @@ class BackfillService extends Component
         return false;
     }
 
+    private function applyPaidOnlyCommerceBackfillFilter(object $query): void
+    {
+        if (method_exists($query, 'isCompleted')) {
+            $query->isCompleted(true);
+        }
+        if (method_exists($query, 'isPaid')) {
+            $query->isPaid();
+        }
+    }
+
+    private function applyCommerceWindowFilter(object $query, string $windowStart): void
+    {
+        if (method_exists($query, 'dateOrdered')) {
+            $query->dateOrdered('>= ' . $windowStart);
+        }
+    }
+
+    /**
+     * @return array{events: array<int, array<string, mixed>>, nextCursor: int, exhausted: bool}
+     */
+    private function fetchEcommerceBackfillPage(array $runtimeState, string $windowStart, int $cursor): array
+    {
+        $events = [];
+        $orderClass = '\craft\commerce\elements\Order';
+        if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
+            return ['events' => [], 'nextCursor' => 0, 'exhausted' => true];
+        }
+
+        $windowStartTs = strtotime($windowStart) ?: 0;
+        $api = \burrow\Burrow\Plugin::getInstance()->getBurrowApi();
+        try {
+            $orderQuery = $orderClass::find()
+                ->status(null)
+                ->site('*');
+            $this->applyPaidOnlyCommerceBackfillFilter($orderQuery);
+            $this->applyCommerceWindowFilter($orderQuery, $windowStart);
+            $orderQuery
+                ->orderBy(['elements.id' => SORT_DESC])
+                ->limit(self::BACKFILL_QUERY_BATCH);
+            if ($cursor > 0) {
+                $orderQuery->andWhere(['<', 'elements.id', $cursor]);
+            }
+            $orders = $orderQuery->all();
+        } catch (\Throwable) {
+            return ['events' => [], 'nextCursor' => $cursor, 'exhausted' => true];
+        }
+        if ($orders === []) {
+            return ['events' => [], 'nextCursor' => $cursor, 'exhausted' => true];
+        }
+        $nextCursor = $cursor;
+        foreach ($orders as $order) {
+            if (!is_object($order)) {
+                continue;
+            }
+            $orderElementId = (int)($order->id ?? 0);
+            if ($orderElementId > 0) {
+                $nextCursor = $orderElementId;
+            }
+            $submittedAt = $this->normalizeTimestamp($this->objectDateValue($order, ['dateOrdered', 'datePaid', 'dateAuthorized', 'dateCreated']));
+            if ($submittedAt === '') {
+                continue;
+            }
+            $submittedTs = strtotime($submittedAt) ?: 0;
+            if ($submittedTs < $windowStartTs) {
+                continue;
+            }
+            $orderId = $this->extractCommerceOrderIdentifier($order);
+            if ($orderId === '') {
+                continue;
+            }
+            $orderReference = $this->objectStringValue($order, ['reference', 'shortNumber']);
+            $orderLookupNumber = $this->objectStringValue($order, ['number', 'id']);
+            $currency = $this->objectStringValue($order, ['paymentCurrency', 'currency']) ?: 'USD';
+            $items = $this->extractCommerceLineItemsFromOrderElement($order);
+            $orderTotal = $this->extractCommerceOrderTotal($order);
+            $itemCount = count($items);
+            if ($itemCount <= 0) {
+                $itemCount = max(0, (int)round($this->objectFloatValue($order, ['totalQty', 'totalQuantity', 'itemQty'])));
+            }
+            $shippingMethod = $this->extractCommerceShippingMethod($order);
+            $shippingAddress = $this->extractCommerceShippingAddress($order);
+            $paymentMethod = $this->extractCommercePaymentMethod($order);
+            $customerToken = $this->extractCommerceCustomerToken($order);
+            $isGuest = $this->extractCommerceIsGuest($order);
+            $couponCode = $this->objectStringValue($order, ['couponCode']);
+
+            $tags = [
+                'provider' => 'craft-commerce',
+                'currency' => $currency,
+            ];
+            if ($orderReference !== '') {
+                $tags['orderReference'] = $orderReference;
+            }
+            if ($orderLookupNumber !== '') {
+                $tags['orderLookupNumber'] = $orderLookupNumber;
+            }
+            if ($shippingMethod !== '') {
+                $tags['shippingMethod'] = $shippingMethod;
+            }
+            if ($shippingAddress['country'] !== '') {
+                $tags['shippingCountry'] = $shippingAddress['country'];
+            }
+            if ($shippingAddress['region'] !== '') {
+                $tags['shippingRegion'] = $shippingAddress['region'];
+            }
+            if ($paymentMethod !== '') {
+                $tags['paymentMethod'] = $paymentMethod;
+            }
+            if ($customerToken !== '') {
+                $tags['customerToken'] = $customerToken;
+            }
+            if ($isGuest !== '') {
+                $tags['isGuest'] = $isGuest;
+            }
+            if ($couponCode !== '') {
+                $tags['couponCode'] = $couponCode;
+            }
+
+            $externalEntityId = 'craft_order_' . $orderId;
+            $built = $api->buildEcommerceOrderAndItemEvents($runtimeState, [
+                'orderId' => $orderId,
+                'orderTotal' => $orderTotal,
+                'currency' => $currency,
+                'itemCount' => $itemCount,
+                'submittedAt' => $submittedAt,
+                'timestamp' => $submittedAt,
+                'subtotal' => $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']),
+                'tax' => $this->objectFloatValue($order, ['totalTax', 'taxTotal']),
+                'shippingTotal' => $this->objectFloatValue($order, ['totalShippingCost']),
+                'externalEntityId' => $externalEntityId,
+                'externalEventId' => $externalEntityId . '_placed',
+                'customerToken' => $customerToken,
+                'tags' => $tags,
+                'items' => $items,
+            ]);
+            if (!empty($built)) {
+                foreach ($built as $ev) {
+                    if (is_array($ev) && $ev !== []) {
+                        $events[] = $ev;
+                    }
+                }
+            } else {
+                \burrow\Burrow\Plugin::getInstance()->getLogs()->log(
+                    'warning',
+                    'Commerce order envelope build returned no events during backfill',
+                    'backfill',
+                    'ecommerce',
+                    null,
+                    [
+                        'orderId' => $orderId,
+                        'orderTotal' => $orderTotal,
+                        'itemCount' => $itemCount,
+                        'submittedAt' => $submittedAt,
+                        'currency' => $currency,
+                    ]
+                );
+            }
+
+            $statusHandle = $this->extractCommerceOrderStatusHandle($order);
+            $lifecycleState = $this->resolveLifecycleStateForBackfill($runtimeState, $statusHandle);
+            if ($lifecycleState !== null) {
+                $lifecycleTags = ['provider' => 'craft-commerce', 'currency' => $currency];
+                if ($customerToken !== '') {
+                    $lifecycleTags['customerToken'] = $customerToken;
+                }
+                $lifecycleEnvelope = $api->buildEcommerceOrderLifecycleEvent($runtimeState, [
+                    'lifecycleState' => $lifecycleState,
+                    'orderId' => $orderId,
+                    'orderTotal' => $orderTotal,
+                    'currency' => $currency,
+                    'timestamp' => $submittedAt,
+                    'externalEntityId' => $externalEntityId,
+                    'externalEventId' => $externalEntityId . '_' . $lifecycleState,
+                    'tags' => $lifecycleTags,
+                ]);
+                if (is_array($lifecycleEnvelope) && $lifecycleEnvelope !== []) {
+                    $events[] = $lifecycleEnvelope;
+                }
+            }
+        }
+        $orderCount = count($orders);
+        unset($orders);
+
+        return [
+            'events' => $events,
+            'nextCursor' => $nextCursor,
+            'exhausted' => $orderCount < self::BACKFILL_QUERY_BATCH,
+        ];
+    }
+
+    /**
+     * Order count in the window (each order yields at least one event); used for discovery debug only.
+     */
+    private function countEcommerceBackfillEvents(array $runtimeState, string $windowStart): int
+    {
+        $orderClass = '\craft\commerce\elements\Order';
+        if (!class_exists($orderClass) || !method_exists($orderClass, 'find')) {
+            return 0;
+        }
+        try {
+            $query = $orderClass::find()->status(null)->site('*');
+            $this->applyPaidOnlyCommerceBackfillFilter($query);
+            $this->applyCommerceWindowFilter($query, $windowStart);
+
+            return (int)$query->count();
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    private function extractCommerceOrderIdentifier(object $order): string
+    {
+        return $this->objectStringValue($order, ['id', 'number', 'reference', 'shortNumber']);
+    }
+
+    private function extractCommerceOrderTotal(object $order): float
+    {
+        $total = $this->objectFloatValue($order, ['totalPaid', 'totalPrice', 'total']);
+        if ($total > 0.0) {
+            return $total;
+        }
+        return $this->objectFloatValue($order, ['itemSubtotal', 'subtotal']);
+    }
+
+    private function extractCommerceShippingMethod(object $order): string
+    {
+        $method = $this->objectStringValue($order, ['shippingMethodName', 'shippingMethodHandle']);
+        if ($method !== '') {
+            return $method;
+        }
+
+        $shippingMethod = null;
+        if (method_exists($order, 'getShippingMethod')) {
+            $shippingMethod = $order->getShippingMethod();
+        } elseif (isset($order->shippingMethod)) {
+            $shippingMethod = $order->shippingMethod;
+        }
+        if (is_object($shippingMethod)) {
+            return $this->objectStringValue($shippingMethod, ['name', 'handle', 'id']);
+        }
+
+        return '';
+    }
+
+    /**
+     * @return array{country: string, region: string}
+     */
+    private function extractCommerceShippingAddress(object $order): array
+    {
+        $result = ['country' => '', 'region' => ''];
+        $address = null;
+        if (method_exists($order, 'getShippingAddress')) {
+            $address = $order->getShippingAddress();
+        } elseif (isset($order->shippingAddress)) {
+            $address = $order->shippingAddress;
+        }
+        if (!is_object($address)) {
+            return $result;
+        }
+        $result['country'] = $this->objectStringValue($address, ['countryCode', 'country']);
+        $result['region'] = $this->objectStringValue($address, ['administrativeArea', 'stateText', 'state', 'province']);
+        return $result;
+    }
+
+    private function extractCommercePaymentMethod(object $order): string
+    {
+        if (method_exists($order, 'getGateway')) {
+            $gateway = $order->getGateway();
+            if (is_object($gateway)) {
+                $name = $this->objectStringValue($gateway, ['name', 'handle']);
+                if ($name !== '') {
+                    return $name;
+                }
+            }
+        }
+        $gatewayId = $this->objectStringValue($order, ['gatewayId']);
+        if ($gatewayId !== '') {
+            return $gatewayId;
+        }
+        return $this->objectStringValue($order, ['paymentMethodName', 'paymentSource']);
+    }
+
+    private function extractCommerceCustomerToken(object $order): string
+    {
+        $email = $this->objectStringValue($order, ['email']);
+        if ($email !== '') {
+            return 'craft_' . hash('sha256', strtolower(trim($email)));
+        }
+        $customerId = $this->objectStringValue($order, ['customerId']);
+        if ($customerId !== '') {
+            return 'craft_cust_' . $customerId;
+        }
+        return '';
+    }
+
+    private function extractCommerceIsGuest(object $order): string
+    {
+        if (method_exists($order, 'getUser')) {
+            return $order->getUser() === null ? 'true' : 'false';
+        }
+        if (method_exists($order, 'getCustomer')) {
+            return $order->getCustomer() === null ? 'true' : 'false';
+        }
+        if (isset($order->isGuest)) {
+            return $order->isGuest ? 'true' : 'false';
+        }
+        return '';
+    }
+
+    private function extractCommerceOrderStatusLabel(object $order): string
+    {
+        $status = null;
+        if (method_exists($order, 'getOrderStatus')) {
+            $status = $order->getOrderStatus();
+        } elseif (isset($order->orderStatus)) {
+            $status = $order->orderStatus;
+        }
+        if (is_object($status)) {
+            return $this->objectStringValue($status, ['handle', 'name', 'id']);
+        }
+        return '';
+    }
+
+    private function extractCommerceOrderStatusHandle(object $order): string
+    {
+        $status = null;
+        if (method_exists($order, 'getOrderStatus')) {
+            $status = $order->getOrderStatus();
+        } elseif (isset($order->orderStatus)) {
+            $status = $order->orderStatus;
+        }
+        if (is_object($status) && isset($status->handle)) {
+            return strtolower(trim((string)$status->handle));
+        }
+        return '';
+    }
+
+    /**
+     * @return 'fulfilled'|'refunded'|'cancelled'|null
+     */
+    private function resolveLifecycleStateForBackfill(array $runtimeState, string $statusHandle): ?string
+    {
+        if ($statusHandle === '') {
+            return null;
+        }
+        $commerceConfig = is_array($runtimeState['integrationSettings']['commerce'] ?? null)
+            ? $runtimeState['integrationSettings']['commerce']
+            : [];
+        $map = is_array($commerceConfig['orderStatusMap'] ?? null) ? $commerceConfig['orderStatusMap'] : [];
+
+        foreach ($map as $lifecycleState => $handles) {
+            if (!is_array($handles)) {
+                continue;
+            }
+            $normalized = array_map(fn($h) => strtolower(trim((string)$h)), $handles);
+            if (in_array($statusHandle, $normalized, true)) {
+                return (string)$lifecycleState;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function normalizeNumericValue($value): float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float)$value;
+        }
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return 0.0;
+            }
+            if (is_numeric($trimmed)) {
+                return (float)$trimmed;
+            }
+            if (preg_match('/-?\d+(?:\.\d+)?/', str_replace(',', '', $trimmed), $match)) {
+                return (float)$match[0];
+            }
+            return 0.0;
+        }
+        if (is_object($value)) {
+            foreach (['getAmount', 'getValue', 'amount', 'value'] as $probe) {
+                if (str_starts_with($probe, 'get') && method_exists($value, $probe)) {
+                    return $this->normalizeNumericValue($value->{$probe}());
+                }
+                if (!str_starts_with($probe, 'get') && isset($value->{$probe})) {
+                    return $this->normalizeNumericValue($value->{$probe});
+                }
+            }
+            if (method_exists($value, '__toString')) {
+                return $this->normalizeNumericValue((string)$value);
+            }
+        }
+        return 0.0;
+    }
 
     private function normalizeTimestamp(string $value): string
     {
@@ -683,6 +1052,7 @@ class BackfillService extends Component
         }
 
         $defaultRejectReason = $this->summarizeBackfillRejections($rejectedRows, $sdkResult);
+        $sentBatch = [];
 
         foreach ($events as $index => $event) {
             if (!is_array($event)) {
@@ -742,8 +1112,14 @@ class BackfillService extends Component
                 }
             }
 
-            $plugin->getQueue()->markSent($eventKey, $event, $channel, $eventName);
+            $sentBatch[] = [
+                'eventKey' => $eventKey,
+                'payload' => $event,
+                'channel' => $channel,
+                'eventName' => $eventName,
+            ];
         }
+        $plugin->getQueue()->markSentBatch($sentBatch);
 
         return !($acceptedCount === 0 && $rejectedCount > 0);
     }

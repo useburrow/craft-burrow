@@ -1161,7 +1161,7 @@ class SettingsController extends Controller
         }
         $plugin->getState()->saveState($runtimeState);
 
-        Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\BackfillChunkJob());
+        \craft\helpers\Queue::push(new \burrow\Burrow\jobs\BackfillChunkJob(), null, 0, \burrow\Burrow\jobs\BackfillChunkJob::TTR);
 
         if ($fromSetup) {
             $plugin->getLogs()->log('info', 'Onboarding finished with backfill queued', 'onboarding', 'system');

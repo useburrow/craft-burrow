@@ -253,7 +253,7 @@ class IntegrationsService extends Component
                 ]);
             }
 
-            $contracts = $this->buildFormsContracts($siteRuntime);
+            $contracts = $this->buildFormsContracts($siteRuntime, $siteId);
             $siteContractsCount = count($contracts);
             $contractsCount = max($contractsCount, $siteContractsCount);
 
@@ -656,9 +656,10 @@ class IntegrationsService extends Component
 
     /**
      * @param array<string,mixed> $runtimeState
+     * @param int|null $forCraftSiteId when set, only contracts mapped to this Craft site are returned
      * @return array<int,array<string,mixed>>
      */
-    public function buildFormsContracts(array $runtimeState): array
+    public function buildFormsContracts(array $runtimeState, ?int $forCraftSiteId = null): array
     {
         $contracts = [];
         $integrationSettings = is_array($runtimeState['integrationSettings'] ?? null)
@@ -670,6 +671,17 @@ class IntegrationsService extends Component
                 ? $integrationSettings[$adapter->getId()]
                 : [];
             $contracts = array_merge($contracts, $adapter->buildContracts($config, $runtimeState));
+        }
+
+        if ($forCraftSiteId !== null && $forCraftSiteId > 0) {
+            $contracts = array_values(array_filter($contracts, static function (array $contract) use ($forCraftSiteId): bool {
+                $mappedSiteId = (int)($contract['craftSiteId'] ?? 0);
+                if ($mappedSiteId <= 0) {
+                    $mappedSiteId = (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+                }
+
+                return $mappedSiteId === $forCraftSiteId;
+            }));
         }
 
         if ($contracts === []) {

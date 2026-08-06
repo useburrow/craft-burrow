@@ -193,10 +193,20 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
                     'form' => $formLabel,
                 ]));
             }
+            $craftSiteId = (int)($formConfig['craftSiteId'] ?? 0);
+            if ($mode !== 'off' && $craftSiteId <= 0 && count(Craft::$app->getSites()->getAllSites()) === 1) {
+                $craftSiteId = (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+            }
+            if ($mode !== 'off' && $craftSiteId <= 0) {
+                throw new \InvalidArgumentException(Craft::t('burrow', '"{form}": choose which Craft site this form should send to.', [
+                    'form' => $formLabel,
+                ]));
+            }
             $normalizedForms[(string)$formId] = [
                 'externalFormId' => trim((string)($formConfig['externalFormId'] ?? $formId)),
                 'formName' => trim((string)($formConfig['formName'] ?? '')),
                 'mode' => $mode,
+                'craftSiteId' => $craftSiteId > 0 ? $craftSiteId : null,
                 'fields' => $normalizedFields,
             ];
         }
@@ -251,6 +261,11 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
                 : (trim((string)($known['name'] ?? '')) ?: ($this->getLabel() . ' ' . $formId));
             $formHandle = trim((string)($known['handle'] ?? ''));
 
+            $craftSiteId = (int)($config['craftSiteId'] ?? 0);
+            if ($craftSiteId <= 0) {
+                $craftSiteId = (int)(Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
+            }
+
             $contracts[] = [
                 'provider' => $this->getId(),
                 'externalFormId' => str_starts_with($externalId, $prefixLower) ? $externalId : ($prefixLower . $externalId),
@@ -259,6 +274,7 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
                 'enabled' => true,
                 'countOnly' => $mode !== 'custom_fields',
                 'mode' => $mode,
+                'craftSiteId' => $craftSiteId > 0 ? $craftSiteId : null,
                 'fieldMappings' => $mappings,
                 'icon' => null,
             ];
@@ -341,9 +357,11 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
             if (!in_array($mode, ['count_only', 'custom_fields'], true)) {
                 continue;
             }
+            $craftSiteId = (int)($form['craftSiteId'] ?? 0);
             $byId[$formId] = [
                 'mode' => $mode,
                 'formName' => trim((string)($form['formName'] ?? '')) ?: ('Form ' . $formId),
+                'craftSiteId' => $craftSiteId > 0 ? $craftSiteId : null,
                 'fields' => is_array($form['fields'] ?? null) ? $form['fields'] : [],
             ];
         }
@@ -497,8 +515,18 @@ abstract class AbstractFormIntegrationAdapter implements FormIntegrationAdapter
                 'formName' => (string)($formNames[$formId] ?? ('Form ' . $formId)),
                 'fields' => [],
             ];
-            $event = $this->buildSubmissionEnvelope($row, $formId, $formConfig, null, $runtimeState);
+            $formSiteId = (int)($formConfig['craftSiteId'] ?? 0);
+            $eventRuntime = $runtimeState;
+            if ($formSiteId > 0) {
+                $eventRuntime = Plugin::getInstance()->getState()->getSiteState($formSiteId);
+                $eventRuntime['integrationSettings'] = (array)($runtimeState['integrationSettings'] ?? []);
+            }
+            $event = $this->buildSubmissionEnvelope($row, $formId, $formConfig, null, $eventRuntime);
             if ($event !== []) {
+                if ($formSiteId > 0) {
+                    $event['_burrowSiteId'] = $formSiteId;
+                    $event['_burrowProjectId'] = (string)($eventRuntime['projectId'] ?? '');
+                }
                 $events[] = $event;
             }
         }

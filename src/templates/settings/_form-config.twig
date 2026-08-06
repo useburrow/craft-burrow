@@ -7,6 +7,9 @@
 {% set adapterData = formAdapterData %}
 {% set adapterConfig = integrationStepData.settings[adapterId] ?? {} %}
 {% set savedForms = adapterConfig.forms ?? {} %}
+{% set formSiteOptions = formSiteOptions|default([]) %}
+{% set defaultFormSiteId = defaultFormSiteId|default(0) %}
+{% set requireFormSiteMapping = requireFormSiteMapping|default(formSiteOptions|length > 1) %}
 {% set selectedFormCount = 0 %}
 {% for form in adapterData.forms %}
     {% set existingMode = (savedForms[form.id].mode ?? 'off') %}
@@ -16,8 +19,11 @@
 {% endfor %}
 <p class="burrow-muted">
     Add the forms you want to track. Count-only sends a minimal envelope (formId, formName, submissionId, timestamp). Custom fields only adds mapped tags/properties — never full submission element data.
+    {% if requireFormSiteMapping %}
+        {{ 'Each form must be assigned to a Craft site so submissions attribute to that site’s Burrow project (required for Freeform, which has no submission site ID).'|t('burrow') }}
+    {% endif %}
 </p>
-<form method="post" action="{{ actionUrl(saveIntegrationAction) }}" class="burrow-form-config-form" data-adapter-id="{{ adapterId }}">
+<form method="post" action="{{ actionUrl(saveIntegrationAction) }}" class="burrow-form-config-form" data-adapter-id="{{ adapterId }}" data-require-site="{{ requireFormSiteMapping ? '1' : '0' }}">
     {{ csrfInput() }}
     <input type="hidden" name="integration" value="{{ adapterId }}">
     {{ forms.textField({
@@ -46,6 +52,7 @@
                     {% set isCustomMode = formMode == 'custom_fields' %}
                     {% set formFields = adapterData.fieldsByFormId[form.id] ?? [] %}
                     {% set mappedFields = formConfig.fields ?? {} %}
+                    {% set formCraftSiteId = formConfig.craftSiteId ?? defaultFormSiteId %}
                     {% set lastSubmittedLabel = form.lastSubmittedAt ? form.lastSubmittedAt|date('M j, Y') : 'No submissions'|t('burrow') %}
                     <div
                         class="burrow-form-integration-block{% if not isSelected %} is-unselected{% endif %}"
@@ -69,6 +76,30 @@
                             <button type="button" class="btn burrow-form-remove-btn">{{ 'Remove'|t('burrow') }}</button>
                         </div>
                         <div class="burrow-form-selected-body">
+                            <div class="burrow-form-site-field" style="margin: 0 0 12px 0; max-width: 420px;">
+                                <label for="{{ adapterId }}-{{ form.id }}-craftSiteId"><strong>{{ 'Burrow site'|t('burrow') }}</strong></label>
+                                <div class="select" style="display: block; margin-top: 4px;">
+                                    <select
+                                        id="{{ adapterId }}-{{ form.id }}-craftSiteId"
+                                        class="burrow-form-site-select"
+                                        name="{{ adapterId }}[forms][{{ form.id }}][craftSiteId]"
+                                        {{ not isSelected ? 'disabled' : '' }}
+                                        {% if requireFormSiteMapping %}required{% endif %}
+                                    >
+                                        {% if requireFormSiteMapping %}
+                                            <option value="">{{ 'Select a site…'|t('burrow') }}</option>
+                                        {% endif %}
+                                        {% for site in formSiteOptions %}
+                                            <option value="{{ site.id }}" {% if formCraftSiteId == site.id %}selected{% endif %}>
+                                                {{ site.name }}{% if site.primary %} · {{ 'Primary'|t('burrow') }}{% endif %}
+                                            </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <p class="burrow-muted" style="margin: 4px 0 0; font-size: 12px;">
+                                    {{ 'Submissions for this form are sent with this site’s Burrow project key.'|t('burrow') }}
+                                </p>
+                            </div>
                             <fieldset class="burrow-form-mode-fieldset">
                                 <legend><strong>{{ 'Tracking mode'|t('burrow') }}</strong></legend>
                                 <span class="burrow-form-mode-option">{{ forms.radio({
@@ -207,6 +238,8 @@
                     || document.querySelector('.burrow-form-config-form[data-adapter-id="{{ adapterId }}"]');
                 if (!root) return;
 
+                const requireSite = root.dataset.requireSite === '1';
+                const defaultSiteId = {{ defaultFormSiteId|json_encode|raw }};
                 const picker = root.querySelector('.burrow-form-picker-select');
                 const addBtn = root.querySelector('.burrow-form-add-btn');
                 const submitBtn = root.querySelector('.burrow-form-submit-btn');
@@ -236,9 +269,11 @@
                     const fieldCheckboxes = Array.from(block.querySelectorAll('.burrow-form-field-checkbox'));
                     const mappingControls = Array.from(block.querySelectorAll('.burrow-field-mapping-table-wrap input, .burrow-field-mapping-table-wrap select, .burrow-field-mapping-table-wrap textarea'));
                     const identityInputs = Array.from(block.querySelectorAll('.burrow-form-external-id, .burrow-form-name-input'));
+                    const siteSelect = block.querySelector('.burrow-form-site-select');
 
                     modeInputs.forEach((input) => setControlDisabled(input, !selected));
                     identityInputs.forEach((input) => setControlDisabled(input, !selected));
+                    setControlDisabled(siteSelect, !selected);
 
                     if (!selected) {
                         modeInputs.forEach((input) => {
@@ -250,6 +285,10 @@
                             row.classList.add('is-disabled');
                         });
                         return;
+                    }
+
+                    if (siteSelect && !siteSelect.value && defaultSiteId) {
+                        siteSelect.value = String(defaultSiteId);
                     }
 
                     const picked = modeInputs.find((input) => input.checked);
@@ -307,7 +346,6 @@
                         if (selectedList) {
                             selectedList.appendChild(block);
                         }
-                        // Keep the bottom picker in context after each add.
                         const pickerSection = root.querySelector('.burrow-form-picker-section');
                         if (pickerSection) {
                             pickerSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -344,7 +382,6 @@
                     syncBlockMode(block);
                 });
 
-                // Keep already-selected blocks in a stable stack at the top of the list.
                 if (selectedList) {
                     blocks
                         .filter((block) => block.dataset.selected === '1')
@@ -370,12 +407,19 @@
                         if (block.dataset.selected !== '1') {
                             continue;
                         }
+                        const formName = block.dataset.formName || 'This form';
+                        const siteSelect = block.querySelector('.burrow-form-site-select');
+                        if (requireSite && siteSelect && !siteSelect.value) {
+                            event.preventDefault();
+                            window.alert(formName + ': please choose which Craft site this form should send to.');
+                            siteSelect.focus();
+                            return;
+                        }
                         const selectedMode = block.querySelector('.burrow-form-mode-radio:checked');
                         const mode = selectedMode ? selectedMode.value : 'count_only';
                         if (mode !== 'custom_fields') {
                             continue;
                         }
-                        const formName = block.dataset.formName || 'This form';
                         const includedFields = Array.from(block.querySelectorAll('.burrow-form-field-checkbox:checked'));
                         if (!includedFields.length) {
                             event.preventDefault();

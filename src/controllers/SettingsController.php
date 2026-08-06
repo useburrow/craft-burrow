@@ -184,6 +184,39 @@ class SettingsController extends Controller
         $formAdapterViewData = $integrationsService->buildFormAdapterViewData($runtimeState);
         $formsContracts = $integrationsService->buildFormsContracts($runtimeState);
         $integrationReadinessRows = $integrationsService->buildIntegrationReadinessRows($runtimeState);
+        $craftSites = $plugin->getState()->listCraftSites();
+        $formSiteOptions = [];
+        $siteNameById = [];
+        foreach ($craftSites as $site) {
+            $siteId = (int)($site['id'] ?? 0);
+            if ($siteId <= 0) {
+                continue;
+            }
+            $siteNameById[$siteId] = (string)($site['name'] ?? $site['handle'] ?? $siteId);
+            $siteState = $plugin->getState()->getSiteState($siteId);
+            if (!empty($siteState['enabled']) && trim((string)($siteState['projectId'] ?? '')) !== '') {
+                $formSiteOptions[] = $site;
+            }
+        }
+        // During onboarding before every site is linked, still offer enabled sites (or all sites).
+        if ($formSiteOptions === []) {
+            foreach ($craftSites as $site) {
+                $siteId = (int)($site['id'] ?? 0);
+                if ($siteId <= 0) {
+                    continue;
+                }
+                $siteState = is_array(($runtimeState['siteStates'][(string)$siteId] ?? null))
+                    ? $runtimeState['siteStates'][(string)$siteId]
+                    : [];
+                if (!empty($siteState['enabled']) || count($craftSites) === 1) {
+                    $formSiteOptions[] = $site;
+                }
+            }
+        }
+        if ($formSiteOptions === []) {
+            $formSiteOptions = $craftSites;
+        }
+
         $contractRows = [];
         $integrationLabels = $integrationsService->integrationLabels();
         foreach ($formsContracts as $contract) {
@@ -192,12 +225,15 @@ class SettingsController extends Controller
                 ? 'Custom fields'
                 : ($mode === 'off' ? 'Off' : 'Count-only');
             $providerKey = trim((string)($contract['provider'] ?? ''));
+            $mappedSiteId = (int)($contract['craftSiteId'] ?? 0);
             $contractRows[] = [
                 'provider' => (string)($integrationLabels[$providerKey] ?? $providerKey),
                 'providerKey' => $providerKey,
                 'formName' => trim((string)($contract['formName'] ?? '')),
                 'externalFormId' => trim((string)($contract['externalFormId'] ?? '')),
                 'mode' => $modeLabel,
+                'craftSiteId' => $mappedSiteId > 0 ? $mappedSiteId : null,
+                'siteName' => $mappedSiteId > 0 ? (string)($siteNameById[$mappedSiteId] ?? $mappedSiteId) : '',
                 'mappingCount' => is_array($contract['fieldMappings'] ?? null) ? count((array)$contract['fieldMappings']) : 0,
             ];
         }
@@ -260,6 +296,7 @@ class SettingsController extends Controller
             ];
         }
         $projectUrl = $this->resolveProjectUrl($runtimeState, $plugin->getBurrowBaseUrl());
+        $defaultFormSiteId = (int)($formSiteOptions[0]['id'] ?? Craft::$app->getSites()->getPrimarySite()?->id ?? 0);
 
         return [
             'state' => $runtimeState,
@@ -279,6 +316,10 @@ class SettingsController extends Controller
             'contractSyncMeta' => $syncMeta,
             'integrationSummaryRows' => $integrationSummaryRows,
             'projectUrl' => $projectUrl,
+            'craftSites' => $craftSites,
+            'formSiteOptions' => $formSiteOptions,
+            'defaultFormSiteId' => $defaultFormSiteId,
+            'requireFormSiteMapping' => count($formSiteOptions) > 1,
             'sdkAvailable' => $plugin->getBurrowApi()->isSdkAvailable(),
             'queueStats' => $plugin->getQueue()->stats(),
             'logs' => $plugin->getLogs()->latest(25),

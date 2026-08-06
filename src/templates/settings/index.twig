@@ -427,19 +427,21 @@
                         <th>Provider</th>
                         <th>Form</th>
                         <th>Form ID</th>
+                        <th>Site</th>
                         <th>Mode</th>
                         <th>Mapped fields</th>
                     </tr>
                     </thead>
                     <tbody>
                     {% if contractRows is empty %}
-                        <tr><td colspan="5">No enabled contracts yet. Return to provider setup and enable at least one form.</td></tr>
+                        <tr><td colspan="6">No enabled contracts yet. Return to provider setup and enable at least one form.</td></tr>
                     {% else %}
                         {% for row in contractRows %}
                             <tr>
                                 <td>{{ row.provider }}</td>
                                 <td>{{ row.formName ?: '-' }}</td>
                                 <td><code>{{ row.externalFormId ?: '-' }}</code></td>
+                                <td>{{ row.siteName ?: '-' }}</td>
                                 <td>{{ row.mode }}</td>
                                 <td>{{ row.mappingCount }}</td>
                             </tr>

@@ -665,7 +665,11 @@ class StateService extends Component
                 : ['name' => '', 'path' => '', 'url' => ''],
             'lastSnapshot' => is_array($site['lastSnapshot'] ?? null) ? $site['lastSnapshot'] : [],
             'craftSiteId' => (int)($site['siteId'] ?? 0),
+            'siteId' => (int)($site['siteId'] ?? 0),
             'siteUrl' => (string)($site['siteUrl'] ?? ''),
+            'siteHandle' => (string)($site['siteHandle'] ?? ''),
+            'enabled' => (bool)($site['enabled'] ?? false),
+            'linked' => (bool)($site['linked'] ?? false),
             'selectedIntegrations' => array_values(array_map('strval', (array)($install['selectedIntegrations'] ?? []))),
             'capabilities' => is_array($install['capabilities'] ?? null)
                 ? $install['capabilities']

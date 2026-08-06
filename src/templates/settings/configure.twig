@@ -112,6 +112,7 @@
                     <th>{{ 'Provider'|t('burrow') }}</th>
                     <th>{{ 'Form'|t('burrow') }}</th>
                     <th>{{ 'Form ID'|t('burrow') }}</th>
+                    <th>{{ 'Site'|t('burrow') }}</th>
                     <th>{{ 'Mode'|t('burrow') }}</th>
                     <th>{{ 'Mapped Fields'|t('burrow') }}</th>
                     <th></th>
@@ -119,13 +120,14 @@
                 </thead>
                 <tbody>
                 {% if contractRows is empty %}
-                    <tr><td colspan="6">{{ 'No active contracts.'|t('burrow') }}</td></tr>
+                    <tr><td colspan="7">{{ 'No active contracts.'|t('burrow') }}</td></tr>
                 {% else %}
                     {% for row in contractRows %}
                         <tr>
                             <td>{{ row.provider }}</td>
                             <td>{{ row.formName ?: '-' }}</td>
                             <td>{{ row.externalFormId ?: '-' }}</td>
+                            <td>{{ row.siteName ?: '-' }}</td>
                             <td>{{ row.mode }}</td>
                             <td>{{ row.mappingCount }}</td>
                             <td>

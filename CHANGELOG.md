@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.1] - 2026-08-06
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Added
+
+- **Per-form Craft site mapping:** Freeform/Formie form setup includes a **Burrow site** select so each tracked form attributes to a linked Craft site’s project (needed because Freeform submissions have no `siteId`). Contracts sync only to the mapped site’s project; runtime prefers the form mapping over submission site inference.
+
+### Fixed
+
+- `getSiteState()` now returns `enabled` / `linked` so site-gated form tracking does not silently drop events.
+
 ## [5.5.0] - 2026-08-06
 
 `schemaVersion` bumped from `5.3.0` to `5.4.0` (`m260806_000005_add_multisite_state_and_outbox_routing`).

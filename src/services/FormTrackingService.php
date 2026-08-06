@@ -17,8 +17,27 @@ class FormTrackingService extends Component
 
         $plugin = \burrow\Burrow\Plugin::getInstance();
         $submission = $normalized['submission'];
-        $siteId = $this->resolveSubmissionSiteId($submission);
+        $eventForm = $normalized['eventForm'] ?? null;
+        $formId = $this->extractSubmissionFormId($submission);
+        if ($formId <= 0 && is_object($eventForm)) {
+            $formId = $this->extractFormObjectId($eventForm);
+        }
+
+        // Install-level form configs (shared); resolve site after we know the form mapping.
+        $installState = $plugin->getState()->getState();
+        $configByFormId = $adapter->trackingConfigsByFormId($installState);
+        if ($formId <= 0 || !isset($configByFormId[$formId])) {
+            return;
+        }
+
+        $config = $configByFormId[$formId];
+        $siteId = $this->resolveTrackingSiteId($submission, $config);
         $runtimeState = $plugin->getState()->getSiteState($siteId);
+        // Keep install-level form settings on the site runtime used for envelope/publish.
+        $runtimeState['integrationSettings'] = (array)($installState['integrationSettings'] ?? []);
+        $runtimeState['selectedIntegrations'] = (array)($installState['selectedIntegrations'] ?? []);
+        $runtimeState['capabilities'] = (array)($installState['capabilities'] ?? []);
+
         if (empty($runtimeState['enabled']) || trim((string)($runtimeState['projectId'] ?? '')) === '') {
             return;
         }
@@ -26,21 +45,6 @@ class FormTrackingService extends Component
             return;
         }
 
-        $configByFormId = $adapter->trackingConfigsByFormId($runtimeState);
-        if ($configByFormId === []) {
-            return;
-        }
-
-        $eventForm = $normalized['eventForm'] ?? null;
-        $formId = $this->extractSubmissionFormId($submission);
-        if ($formId <= 0 && is_object($eventForm)) {
-            $formId = $this->extractFormObjectId($eventForm);
-        }
-        if ($formId <= 0 || !isset($configByFormId[$formId])) {
-            return;
-        }
-
-        $config = $configByFormId[$formId];
         $submissionId = $this->objectStringValue($submission, ['id']);
         $eventEnvelope = $adapter->buildSubmissionEnvelope($submission, $formId, $config, $eventForm, $runtimeState);
         if ($eventEnvelope === []) {
@@ -75,6 +79,27 @@ class FormTrackingService extends Component
             'submissionId' => $submissionId,
             'siteId' => (string)$siteId,
         ]);
+    }
+
+    /**
+     * Resolves which Craft site / Burrow project a form submission should attribute to.
+     *
+     * Prefers the explicit form→site mapping from settings (required for Freeform, which has no
+     * submission siteId). Falls back to the submission's siteId (Formie), then current/primary.
+     *
+     * @param array<string,mixed> $formConfig
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.5.1
+     */
+    public function resolveTrackingSiteId(object $submission, array $formConfig): int
+    {
+        $mappedSiteId = (int)($formConfig['craftSiteId'] ?? 0);
+        if ($mappedSiteId > 0) {
+            return $mappedSiteId;
+        }
+
+        return $this->resolveSubmissionSiteId($submission);
     }
 
     /**

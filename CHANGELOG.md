@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.2] - 2026-08-24
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Fixed
+
+- **System heartbeat queue failures:** restore a valid PHP working directory when a queue worker's cwd has been deleted (typical after a deploy). Yii isolate-spawn was failing jobs with `The provided cwd "" does not exist.` before the heartbeat ran.
+
 ## [5.5.1] - 2026-08-06
 
 No database schema changes; `schemaVersion` remains `5.4.0`.

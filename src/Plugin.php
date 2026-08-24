@@ -15,6 +15,7 @@ use craft\events\PluginEvent;
 use craft\events\RegisterComponentTypesEvent;
 use craft\events\RegisterUrlRulesEvent;
 use craft\helpers\UrlHelper;
+use craft\queue\Queue as CraftQueue;
 use craft\services\Elements;
 use craft\services\Plugins;
 use craft\web\UrlManager;
@@ -35,6 +36,8 @@ class Plugin extends CraftPlugin
         parent::init();
         self::$plugin = $this;
 
+        $this->_ensureProcessWorkingDirectory();
+        $this->_registerQueueWorkingDirectoryGuard();
         $this->_maybeHandlePostInstallRedirect();
         $this->_registerRoutes();
         $this->_registerPostInstallRedirect();
@@ -226,6 +229,67 @@ class Plugin extends CraftPlugin
         ];
 
         return $item;
+    }
+
+    /**
+     * Restores PHP's working directory when `getcwd()` is empty or points at a removed path.
+     *
+     * Yii queue isolation (`queue/listen --isolate`) spawns each job via Symfony Process using
+     * the worker's cwd. After a deploy the worker can keep running from a deleted release
+     * directory, which surfaces as "The provided cwd "" does not exist."
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.5.2
+     */
+    private function _ensureProcessWorkingDirectory(): void
+    {
+        $cwd = getcwd();
+        if (is_string($cwd) && $cwd !== '' && is_dir($cwd)) {
+            return;
+        }
+
+        $candidates = [];
+        if (defined('CRAFT_BASE_PATH')) {
+            $candidates[] = CRAFT_BASE_PATH;
+        }
+
+        $root = Craft::getAlias('@root', false);
+        if (is_string($root) && $root !== '') {
+            $candidates[] = $root;
+        }
+
+        /** @var \craft\web\Application|\craft\console\Application $app */
+        $app = Craft::$app;
+        $vendorPath = $app->getPath()->getVendorPath();
+        if (is_string($vendorPath) && $vendorPath !== '') {
+            $candidates[] = dirname($vendorPath);
+        }
+
+        foreach ($candidates as $path) {
+            $resolved = realpath($path);
+            if (!is_string($resolved) || $resolved === '' || !is_dir($resolved)) {
+                continue;
+            }
+
+            chdir($resolved);
+            return;
+        }
+    }
+
+    /**
+     * Re-applies a valid working directory on each queue worker loop, before isolate-spawn.
+     *
+     * @author Burrow Analytics, LLC
+     * @since 5.5.2
+     */
+    private function _registerQueueWorkingDirectoryGuard(): void
+    {
+        $restore = function(): void {
+            $this->_ensureProcessWorkingDirectory();
+        };
+
+        Event::on(CraftQueue::class, CraftQueue::EVENT_WORKER_START, $restore);
+        Event::on(CraftQueue::class, CraftQueue::EVENT_WORKER_LOOP, $restore);
     }
 
     private function _registerRoutes(): void

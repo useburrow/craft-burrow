@@ -2,6 +2,7 @@
 namespace burrow\Burrow\controllers;
 
 use Craft;
+use craft\helpers\App;
 use craft\web\Controller;
 use yii\web\Response;
 
@@ -324,6 +325,20 @@ class SettingsController extends Controller
             'queueStats' => $plugin->getQueue()->stats(),
             'logs' => $plugin->getLogs()->latest(25),
         ];
+    }
+
+    /**
+     * Resolves a connection field that may be a Craft env reference (`$NAME`) or a literal.
+     * Falls back to a direct process env var when the parsed value is empty.
+     */
+    private function resolveConnectionValue(string $raw, string $directEnvName): string
+    {
+        $parsed = trim((string)App::parseEnv(trim($raw)));
+        if ($parsed !== '') {
+            return $parsed;
+        }
+
+        return trim((string)App::env($directEnvName));
     }
 
     /**
@@ -797,20 +812,23 @@ class SettingsController extends Controller
 
         $request = Craft::$app->getRequest();
         $plugin = Plugin::getInstance();
-        $baseUrl = trim((string)$request->getBodyParam('baseUrl', $plugin->getBurrowBaseUrl()));
-        $apiKey = trim((string)$request->getBodyParam('apiKey', $plugin->getBurrowApiKey()));
+        // Persist raw values (may be `$BURROW_API_KEY`); resolve for discover/validation.
+        $baseUrlRaw = trim((string)$request->getBodyParam('baseUrl', $plugin->getRawBurrowBaseUrl()));
+        $apiKeyRaw = trim((string)$request->getBodyParam('apiKey', $plugin->getRawBurrowApiKey()));
+        $baseUrl = $this->resolveConnectionValue($baseUrlRaw, 'BURROW_BASE_URL');
+        $apiKey = $this->resolveConnectionValue($apiKeyRaw, 'BURROW_API_KEY');
 
         $relink = $this->isRelinkRequest() || $plugin->isOnboardingCompleted();
         $craftSiteId = (int)$request->getBodyParam('craftSiteId', 0);
 
         if ($baseUrl === '' || $apiKey === '') {
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Base URL and API key are required.'));
+            Craft::$app->getSession()->setError(Craft::t('burrow', 'Base URL and API key are required. Enter a value or an environment variable such as $BURROW_API_KEY.'));
             return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
         }
 
         $runtimeState = $plugin->getState()->getState();
-        $runtimeState['connectionBaseUrl'] = $baseUrl;
-        $runtimeState['connectionApiKey'] = $apiKey;
+        $runtimeState['connectionBaseUrl'] = $baseUrlRaw;
+        $runtimeState['connectionApiKey'] = $apiKeyRaw;
         if (!$plugin->getState()->saveState($runtimeState)) {
             Craft::$app->getSession()->setError(Craft::t('burrow', 'Could not save connection settings.'));
             return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
@@ -819,8 +837,8 @@ class SettingsController extends Controller
         $general = Craft::$app->getConfig()->getGeneral();
         if ($general->allowAdminChanges) {
             $settings = $plugin->getSettings();
-            $settings->baseUrl = $baseUrl;
-            $settings->apiKey = $apiKey;
+            $settings->baseUrl = $baseUrlRaw;
+            $settings->apiKey = $apiKeyRaw;
             if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
                 $errors = $settings->getFirstErrors();
                 $message = Craft::t('burrow', 'Could not sync connection to project config.');
@@ -846,8 +864,8 @@ class SettingsController extends Controller
                 'enabled' => true,
                 'siteUrl' => $discoverSiteUrl,
             ], [
-                'connectionBaseUrl' => $baseUrl,
-                'connectionApiKey' => $apiKey,
+                'connectionBaseUrl' => $baseUrlRaw,
+                'connectionApiKey' => $apiKeyRaw,
             ]);
         }
 

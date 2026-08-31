@@ -161,19 +161,26 @@
                 {% if craftSiteId is defined and craftSiteId %}
                     {{ hiddenInput('craftSiteId', craftSiteId) }}
                 {% endif %}
-                {{ forms.textField({
-                    label: 'Base URL',
+                {{ forms.autosuggestField({
+                    label: 'Base URL'|t('burrow'),
+                    instructions: 'Burrow API endpoint. Enter a URL or an environment variable such as `$BURROW_BASE_URL`.'|t('burrow'),
+                    id: 'baseUrl',
                     name: 'baseUrl',
                     value: settings.baseUrl,
-                    required: true
+                    required: true,
+                    suggestEnvVars: true,
                 }) }}
-                {{ forms.passwordField({
-                    label: 'API Key',
+                {{ forms.autosuggestField({
+                    label: 'API Key'|t('burrow'),
+                    instructions: 'Organization API key for discover and project linking. Prefer an environment variable such as `$BURROW_API_KEY` so the secret is not stored in the database or project config.'|t('burrow'),
+                    id: 'apiKey',
                     name: 'apiKey',
                     value: settings.apiKey,
-                    required: true
+                    required: true,
+                    suggestEnvVars: true,
+                    tip: 'Ongoing event delivery uses a project ingestion key after linking. The organization key is retained for linking additional Craft sites.'|t('burrow'),
                 }) }}
-                <button class="btn submit">Connect & Discover</button>
+                <button class="btn submit">{{ 'Connect & Discover'|t('burrow') }}</button>
                 {% if relinkMode %}
                     <a class="btn" href="{{ cpUrl('burrow/settings', { section: 'connection' }) }}">{{ 'Cancel'|t('burrow') }}</a>
                 {% endif %}

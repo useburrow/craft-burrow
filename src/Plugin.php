@@ -60,7 +60,10 @@ class Plugin extends CraftPlugin
     }
 
     /**
-     * Resolves API base URL from `BURROW_BASE_URL` env first, then DB-backed runtime state, then project config plugin settings.
+     * Resolves the Burrow API base URL for outbound requests.
+     *
+     * Precedence: `BURROW_BASE_URL` env → parsed runtime `connectionBaseUrl` → parsed project-config `baseUrl`.
+     * Stored values may be literals or Craft env references (`$BURROW_BASE_URL`).
      * Use this (not raw {@see getSettings()}) so production saves work when `allowAdminChanges` is false.
      */
     public function getBurrowBaseUrl(): string
@@ -70,8 +73,48 @@ class Plugin extends CraftPlugin
             return $fromEnv;
         }
 
+        $fromState = $this->parseEnvValue($this->getRawBurrowBaseUrlFromState());
+        if ($fromState !== '') {
+            return $fromState;
+        }
+
+        return $this->parseEnvValue((string)$this->getSettings()->baseUrl);
+    }
+
+    /**
+     * Account-level (organization) API key for onboarding (discover/link).
+     *
+     * Precedence: `BURROW_API_KEY` env → parsed runtime `connectionApiKey` → parsed project-config `apiKey`.
+     * Stored values may be literals or Craft env references (`$BURROW_API_KEY`).
+     * Retained after project linking so additional Craft sites can be linked with the same org key.
+     * Does not fall back to project-config `apiKey` when an ingestion key exists and the runtime connection key is empty.
+     */
+    public function getBurrowApiKey(): string
+    {
+        $fromEnv = trim((string)App::env('BURROW_API_KEY'));
+        if ($fromEnv !== '') {
+            return $fromEnv;
+        }
+
         $state = $this->getState()->getState();
-        $fromState = trim((string)($state['connectionBaseUrl'] ?? ''));
+        $fromState = $this->parseEnvValue((string)($state['connectionApiKey'] ?? ''));
+        if ($fromState !== '') {
+            return $fromState;
+        }
+
+        if ($this->runtimeStateHasIngestionKey($state)) {
+            return '';
+        }
+
+        return $this->parseEnvValue((string)$this->getSettings()->apiKey);
+    }
+
+    /**
+     * Unparsed base URL for Control Panel forms (may be `$BURROW_BASE_URL`).
+     */
+    public function getRawBurrowBaseUrl(): string
+    {
+        $fromState = $this->getRawBurrowBaseUrlFromState();
         if ($fromState !== '') {
             return $fromState;
         }
@@ -80,11 +123,9 @@ class Plugin extends CraftPlugin
     }
 
     /**
-     * Account-level (organization) API key for onboarding (discover/link).
-     * Retained after project linking so additional Craft sites can be linked with the same org key.
-     * Falls back to project-config `apiKey` when the runtime connection key is empty and no ingestion key is present yet.
+     * Unparsed organization API key for Control Panel forms (may be `$BURROW_API_KEY`).
      */
-    public function getBurrowApiKey(): string
+    public function getRawBurrowApiKey(): string
     {
         $state = $this->getState()->getState();
         $fromState = trim((string)($state['connectionApiKey'] ?? ''));
@@ -174,16 +215,36 @@ class Plugin extends CraftPlugin
 
     /**
      * Plugin settings with connection fields merged for CP display (avoids mutating the cached settings model).
+     *
+     * Returns unparsed environmental values so the form can show `$BURROW_API_KEY` instead of the secret.
      */
     public function getConnectionSettingsForDisplay(): Settings
     {
         $model = new Settings();
         $stored = $this->getSettings();
         $model->pluginName = $stored->pluginName;
-        $model->baseUrl = $this->getBurrowBaseUrl();
-        $model->apiKey = $this->getBurrowApiKey();
+        $model->baseUrl = $this->getRawBurrowBaseUrl();
+        $model->apiKey = $this->getRawBurrowApiKey();
 
         return $model;
+    }
+
+    /**
+     * Unparsed `connectionBaseUrl` from runtime state only.
+     */
+    private function getRawBurrowBaseUrlFromState(): string
+    {
+        $state = $this->getState()->getState();
+
+        return trim((string)($state['connectionBaseUrl'] ?? ''));
+    }
+
+    /**
+     * Parses a Craft environmental setting value (`$ENV_NAME` or literal).
+     */
+    private function parseEnvValue(string $value): string
+    {
+        return trim((string)App::parseEnv(trim($value)));
     }
 
     public function getSettingsResponse(): mixed

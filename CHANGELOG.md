@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.3] - 2026-08-31
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Added
+
+- **Environmental connection settings:** Base URL and API Key accept Craft env references such as `$BURROW_BASE_URL` / `$BURROW_API_KEY` (autosuggest in Setup → Connection). Raw aliases are stored; values are resolved with `App::parseEnv()` at runtime.
+- **`BURROW_API_KEY` env override:** mirrors existing `BURROW_BASE_URL` precedence for the organization API key (process env wins over stored settings).
+
+### Changed
+
+- Connection form uses Craft `autosuggestField` with `suggestEnvVars` so production installs can avoid putting the organization API key in the database or project config.
+
 ## [5.5.2] - 2026-08-24
 
 No database schema changes; `schemaVersion` remains `5.4.0`.

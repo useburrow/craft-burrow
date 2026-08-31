@@ -142,13 +142,36 @@ The plugin stores three settings in project config:
 
 | Setting | Description |
 |---|---|
-| `baseUrl` | Burrow API endpoint |
-| `apiKey` | Burrow API key |
+| `baseUrl` | Burrow API endpoint (literal or `$BURROW_BASE_URL`) |
+| `apiKey` | Organization API key (literal or `$BURROW_API_KEY`) |
 | `pluginName` | Display name in the Control Panel |
 
 All runtime state (linked project, integrations, sync metadata, snapshots) is stored in plugin tables — not project config.
 
-> Avoid committing live Burrow credentials in project config. Use environment variables where possible.
+### Environment variables (recommended)
+
+`baseUrl` and `apiKey` are [Craft environmental settings](https://craftcms.com/docs/5.x/extend/environmental-settings.html). In **Setup → Connection**, enter an env reference instead of the secret:
+
+```bash
+BURROW_BASE_URL=https://app.useburrow.com
+BURROW_API_KEY=your_org_api_key
+```
+
+Then in the Control Panel set:
+
+- Base URL → `$BURROW_BASE_URL`
+- API Key → `$BURROW_API_KEY`
+
+Project config and the database store only the `$…` aliases. The secret stays in the environment.
+
+You can also set `BURROW_BASE_URL` / `BURROW_API_KEY` as direct process overrides (they win over stored settings). That is useful in production when `allowAdminChanges` is false.
+
+**What is stored after setup**
+
+- The **organization API key** is used for discover/link (and linking additional Craft sites). Prefer `$BURROW_API_KEY` so the raw secret is never persisted.
+- After a project is linked, **event delivery** uses a project-scoped **ingestion key** (encrypted in the plugin DB). That key is write-oriented for Burrow ingestion — not a general Burrow account password — but treat it as a secret.
+
+> Avoid committing live Burrow credentials in project config. Use `$BURROW_API_KEY` (or the direct `BURROW_API_KEY` env override) instead.
 
 ## About Burrow
 

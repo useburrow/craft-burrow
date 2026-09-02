@@ -38,10 +38,10 @@ class Plugin extends CraftPlugin
 
         $this->_ensureProcessWorkingDirectory();
         $this->_registerQueueWorkingDirectoryGuard();
+        $this->_setPluginComponents();
         $this->_maybeHandlePostInstallRedirect();
         $this->_registerRoutes();
         $this->_registerPostInstallRedirect();
-        $this->_setPluginComponents();
         $this->_registerElementTypes();
         $this->_registerCommerceHooks();
         $this->_registerFormHooks();
@@ -141,6 +141,48 @@ class Plugin extends CraftPlugin
     }
 
     /**
+     * Whether the organization API key is supplied by process env or a `$VAR` reference (not a pasted secret).
+     */
+    public function isBurrowApiKeyFromEnvironment(): bool
+    {
+        if (trim((string)App::env('BURROW_API_KEY')) !== '') {
+            return true;
+        }
+
+        return str_starts_with($this->getRawBurrowApiKey(), '$');
+    }
+
+    /**
+     * Whether the Burrow base URL is supplied by process env or a `$VAR` reference.
+     */
+    public function isBurrowBaseUrlFromEnvironment(): bool
+    {
+        if (trim((string)App::env('BURROW_BASE_URL')) !== '') {
+            return true;
+        }
+
+        return str_starts_with($this->getRawBurrowBaseUrl(), '$');
+    }
+
+    /**
+     * Craft application environment name (`CRAFT_ENVIRONMENT`), lowercased.
+     */
+    public function getCraftEnvironment(): string
+    {
+        $env = Craft::$app->env ?? App::env('CRAFT_ENVIRONMENT');
+
+        return strtolower(trim((string)$env));
+    }
+
+    /**
+     * Whether Craft is running outside `production` / `prod` (local, dev, staging, etc.).
+     */
+    public function isNonProductionEnvironment(): bool
+    {
+        return !in_array($this->getCraftEnvironment(), ['production', 'prod'], true);
+    }
+
+    /**
      * Whether runtime state has a project ingestion key from Burrow (used for event dispatch and related API calls).
      *
      * @param array<string,mixed>|null $state
@@ -217,6 +259,7 @@ class Plugin extends CraftPlugin
      * Plugin settings with connection fields merged for CP display (avoids mutating the cached settings model).
      *
      * Returns unparsed environmental values so the form can show `$BURROW_API_KEY` instead of the secret.
+     * When process env supplies credentials and no raw value is stored, suggests the `$BURROW_*` alias.
      */
     public function getConnectionSettingsForDisplay(): Settings
     {
@@ -225,6 +268,13 @@ class Plugin extends CraftPlugin
         $model->pluginName = $stored->pluginName;
         $model->baseUrl = $this->getRawBurrowBaseUrl();
         $model->apiKey = $this->getRawBurrowApiKey();
+
+        if ($model->apiKey === '' && trim((string)App::env('BURROW_API_KEY')) !== '') {
+            $model->apiKey = '$BURROW_API_KEY';
+        }
+        if (trim((string)App::env('BURROW_BASE_URL')) !== '' && !str_starts_with($model->baseUrl, '$')) {
+            $model->baseUrl = '$BURROW_BASE_URL';
+        }
 
         return $model;
     }

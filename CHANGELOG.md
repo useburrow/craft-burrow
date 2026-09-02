@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.4] - 2026-09-02
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Added
+
+- **Auto-skip Connection:** when `BURROW_API_KEY` (and base URL) already resolve from the environment or stored `$VAR` aliases, Setup runs discover automatically and advances to Sites or Project.
+- **Non-production Project warning:** when Craft’s environment is not `production` / `prod`, the Project step warns against linking a live Burrow project from local/dev/staging.
+- Connection step shows an environment-credentials tip when values come from `BURROW_*` / `$…` aliases; empty project list points to Retry Connection instead of “Run Step 1”.
+
+### Fixed
+
+- **Fresh install failure:** plugin services (notably `state`) are registered lazily on first access so Craft can call into the plugin during install before `init()` runs.
+
 ## [5.5.3] - 2026-08-31
 
 No database schema changes; `schemaVersion` remains `5.4.0`.

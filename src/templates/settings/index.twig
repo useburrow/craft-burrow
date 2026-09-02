@@ -145,11 +145,34 @@
         <h2>{{ stepTitles[step] ?? 'Setup' }}</h2>
 
         {% if step == 'connection' %}
+            {% set connectionApiKeyFromEnv = connectionApiKeyFromEnv ?? false %}
+            {% set connectionBaseUrlFromEnv = connectionBaseUrlFromEnv ?? false %}
+            {% set credentialsFromEnv = connectionApiKeyFromEnv or connectionBaseUrlFromEnv %}
+
+            {% if credentialsFromEnv %}
+                <div class="readable">
+                    <blockquote class="note tip">
+                        <p>
+                            {{ 'Credentials from environment'|t('burrow') }}
+                            {% if connectionApiKeyFromEnv and connectionBaseUrlFromEnv %}
+                                — {{ 'Using `BURROW_API_KEY` and `BURROW_BASE_URL` (or `$…` aliases). Setup skips this step automatically when discovery succeeds.'|t('burrow') }}
+                            {% elseif connectionApiKeyFromEnv %}
+                                — {{ 'Using `BURROW_API_KEY` (or a `$…` alias). Setup skips this step automatically when discovery succeeds.'|t('burrow') }}
+                            {% else %}
+                                — {{ 'Using `BURROW_BASE_URL` (or a `$…` alias).'|t('burrow') }}
+                            {% endif %}
+                        </p>
+                    </blockquote>
+                </div>
+            {% endif %}
+
             <p class="burrow-muted">
                 {% if relinkMode %}
                     {{ 'Enter your Burrow account credentials to discover projects and request a new ingestion key.'|t('burrow') }}
+                {% elseif credentialsFromEnv %}
+                    {{ 'Review or override the values below, then connect to discover projects.'|t('burrow') }}
                 {% else %}
-                    {{ 'Connect this Craft site to Burrow and discover available projects.'|t('burrow') }}
+                    {{ 'Connect this Craft site to Burrow and discover available projects. Prefer `$BURROW_API_KEY` so the secret stays in the environment.'|t('burrow') }}
                 {% endif %}
             </p>
 
@@ -180,7 +203,7 @@
                     suggestEnvVars: true,
                     tip: 'Ongoing event delivery uses a project ingestion key after linking. The organization key is retained for linking additional Craft sites.'|t('burrow'),
                 }) }}
-                <button class="btn submit">{{ 'Connect & Discover'|t('burrow') }}</button>
+                <button class="btn submit">{{ credentialsFromEnv ? 'Retry Connect & Discover'|t('burrow') : 'Connect & Discover'|t('burrow') }}</button>
                 {% if relinkMode %}
                     <a class="btn" href="{{ cpUrl('burrow/settings', { section: 'connection' }) }}">{{ 'Cancel'|t('burrow') }}</a>
                 {% endif %}
@@ -210,6 +233,22 @@
             </form>
 
         {% elseif step == 'project' %}
+            {% set isNonProduction = isNonProduction ?? false %}
+            {% set craftEnvironment = craftEnvironment ?? '' %}
+
+            {% if isNonProduction and not relinkMode %}
+                <div class="readable">
+                    <blockquote class="note warning">
+                        <p>
+                            {{ 'This Craft environment is `{env}` (not production). Linking binds this site’s URL to the Burrow project. If you link a live client project here, production setup will fail until you Disconnect the Craft integration in Burrow (Project Settings → Integrations) or confirm a site URL change.'|t('burrow', { env: craftEnvironment ?: 'unknown' }) }}
+                        </p>
+                        <p>
+                            {{ 'Recommended: finish linking only in `production` / `prod`, or create a sandbox project in Burrow for local trials. The plugin cannot create Burrow projects.'|t('burrow') }}
+                        </p>
+                    </blockquote>
+                </div>
+            {% endif %}
+
             <p class="burrow-muted">
                 {% if relinkMode %}
                     {{ 'Confirm the Burrow project for this Craft site. Click Re-link Project to issue a new ingestion key (even if you keep the same project).'|t('burrow') }}
@@ -247,7 +286,11 @@
             {% endif %}
 
             {% if projects is empty %}
-                <p>{{ 'No discovered projects yet. Run Step 1 first, or switch Craft sites after connection.'|t('burrow') }}</p>
+                <p>
+                    {{ 'No discovered projects yet.'|t('burrow') }}
+                    <a href="{{ cpUrl('burrow/setup', relinkMode ? { step: 'connection', relink: '1', craftSiteId: craftSiteId } : { step: 'connection' }) }}">{{ 'Retry Connection'|t('burrow') }}</a>
+                    {{ 'or confirm `BURROW_API_KEY` is set in this environment.'|t('burrow') }}
+                </p>
             {% else %}
                 {% set selectedProjectId = activeSiteState.projectId ?? state.projectId ?? '' %}
                 {% set projectOptions = [] %}
@@ -294,7 +337,11 @@
                         <div class="warning with-icon" style="margin-top: 12px;">
                             <label>
                                 <input type="checkbox" name="confirmSiteChange" value="1">
-                                {{ 'I confirm changing this project’s registered site URL to this Craft site.'|t('burrow') }}
+                                {% if isNonProduction %}
+                                    {{ 'I understand this overwrites the project’s registered site URL (often production) with this Craft site. Prefer Disconnect in Burrow, or link a sandbox project instead.'|t('burrow') }}
+                                {% else %}
+                                    {{ 'I confirm changing this project’s registered site URL to this Craft site.'|t('burrow') }}
+                                {% endif %}
                             </label>
                         </div>
                     {% endif %}

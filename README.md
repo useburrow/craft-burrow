@@ -38,11 +38,12 @@ No webhook configurations in form plugins. No CSV imports. One plugin, total vis
 
 First-time connection uses a step-by-step wizard at **Burrow → Setup** (`burrow/setup`):
 
-1. **Connection** — Save Burrow `baseUrl` and `apiKey`, run SDK discovery
-2. **Project** — Select the Burrow project/client to link; persist routing metadata and ingestion key
-3. **Integrations** — Choose supported integrations and configure provider-specific settings
-4. **Review** — Review contracts and sync to Burrow (including Commerce-only installs)
-5. **Finish** — Mark onboarding complete
+1. **Connection** — Save Burrow `baseUrl` and `apiKey`, run SDK discovery (auto-skipped when `BURROW_API_KEY` resolves)
+2. **Sites** — Multi-site installs only: choose which Craft sites to link
+3. **Project** — Select the Burrow project/client to link; persist routing metadata and ingestion key
+4. **Integrations** — Choose supported integrations and configure provider-specific settings
+5. **Review** — Review contracts and sync to Burrow (including Commerce-only installs)
+6. **Finish** — Mark onboarding complete
 
 ### After onboarding (`Settings`)
 
@@ -172,6 +173,23 @@ You can also set `BURROW_BASE_URL` / `BURROW_API_KEY` as direct process override
 - After a project is linked, **event delivery** uses a project-scoped **ingestion key** (encrypted in the plugin DB). That key is write-oriented for Burrow ingestion — not a general Burrow account password — but treat it as a secret.
 
 > Avoid committing live Burrow credentials in project config. Use `$BURROW_API_KEY` (or the direct `BURROW_API_KEY` env override) instead.
+
+### Local vs production
+
+A Burrow project can be registered to **one** Craft site URL at a time. Linking from a non-production Craft environment (`CRAFT_ENVIRONMENT` anything other than `production` / `prod`) binds that environment’s site URL and will block production until you Disconnect in Burrow or confirm a site URL change.
+
+**Recommended agency path**
+
+1. Set `BURROW_API_KEY` (and optionally `BURROW_BASE_URL`) in every environment’s `.env` / hosting variables.
+2. Finish full Setup (project link + integrations) only in **production**.
+3. On local/dev, either stop after install + env vars, or link a **sandbox** Burrow project created in the Burrow app (the plugin cannot create projects).
+
+**If you already linked a live project from local**
+
+1. In Burrow: Project Settings → Integrations → **Disconnect** Craft.
+2. In production Craft: run Setup and link the live project again.
+
+When Craft’s environment is not `production` / `prod`, Setup shows a warning on the Project step explaining this.
 
 ## About Burrow
 

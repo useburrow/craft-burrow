@@ -36,6 +36,13 @@ class SettingsController extends Controller
             return $this->redirect('burrow/settings?section=overview');
         }
 
+        if (!$relink) {
+            $autoRedirect = $this->maybeAutoEstablishConnection();
+            if ($autoRedirect !== null) {
+                return $this->redirect($autoRedirect);
+            }
+        }
+
         return $this->renderTemplate('burrow/settings/index', $this->buildWizardViewData($relink));
     }
 
@@ -146,6 +153,10 @@ class SettingsController extends Controller
             'backfillSources' => $backfillSources,
             'availableBackfillSources' => $availableBackfillSources,
             'backfillPresets' => $plugin->getBackfill()->presetOptions(),
+            'craftEnvironment' => $plugin->getCraftEnvironment(),
+            'isNonProduction' => $plugin->isNonProductionEnvironment(),
+            'connectionApiKeyFromEnv' => $plugin->isBurrowApiKeyFromEnvironment(),
+            'connectionBaseUrlFromEnv' => $plugin->isBurrowBaseUrlFromEnvironment(),
         ]);
     }
 
@@ -339,6 +350,216 @@ class SettingsController extends Controller
         }
 
         return trim((string)App::env($directEnvName));
+    }
+
+    /**
+     * When org credentials already resolve (typically `BURROW_API_KEY`), discover projects and skip Connection.
+     *
+     * @return string|null CP-relative redirect, or null to keep rendering Setup
+     */
+    private function maybeAutoEstablishConnection(): ?string
+    {
+        $plugin = Plugin::getInstance();
+        $runtimeState = $plugin->getState()->getState();
+        if (!empty($runtimeState['onboardingCompleted'])) {
+            return null;
+        }
+
+        $step = (string)($runtimeState['onboardingStep'] ?? 'connection');
+        if ($step !== '' && $step !== 'connection') {
+            return null;
+        }
+
+        // Explicit Connection visit — show the form (env panel / retry) instead of bouncing away.
+        if ((string)Craft::$app->getRequest()->getQueryParam('step', '') === 'connection') {
+            return null;
+        }
+
+        $baseUrl = $plugin->getBurrowBaseUrl();
+        $apiKey = $plugin->getBurrowApiKey();
+        if ($baseUrl === '' || $apiKey === '') {
+            return null;
+        }
+
+        $session = Craft::$app->getSession();
+        if ($session->get('burrow.autoDiscoverFailed')) {
+            return null;
+        }
+
+        $existingProjects = (array)$session->get('burrow.discoveredProjects', []);
+        if ($existingProjects !== []) {
+            return $this->advancePastConnectionStep(false, 0);
+        }
+
+        $result = $this->establishConnectionFromResolvedCredentials(
+            $plugin->getRawBurrowBaseUrl(),
+            $plugin->getRawBurrowApiKey(),
+            $baseUrl,
+            $apiKey,
+            false,
+            0,
+            true
+        );
+
+        return $result['redirect'];
+    }
+
+    /**
+     * Persists connection credentials, runs discover, and advances onboarding.
+     *
+     * @return array{ok:bool,redirect:string}
+     */
+    private function establishConnectionFromResolvedCredentials(
+        string $baseUrlRaw,
+        string $apiKeyRaw,
+        string $baseUrl,
+        string $apiKey,
+        bool $relink,
+        int $craftSiteId,
+        bool $isAuto = false
+    ): array {
+        $plugin = Plugin::getInstance();
+        $session = Craft::$app->getSession();
+
+        if ($apiKeyRaw === '' && trim((string)App::env('BURROW_API_KEY')) !== '') {
+            $apiKeyRaw = '$BURROW_API_KEY';
+        }
+        if ($baseUrlRaw === '' && trim((string)App::env('BURROW_BASE_URL')) !== '') {
+            $baseUrlRaw = '$BURROW_BASE_URL';
+        }
+        if ($baseUrlRaw === '') {
+            $baseUrlRaw = $baseUrl;
+        }
+
+        if ($baseUrl === '' || $apiKey === '') {
+            $session->setError(Craft::t('burrow', 'Base URL and API key are required. Enter a value or an environment variable such as $BURROW_API_KEY.'));
+
+            return [
+                'ok' => false,
+                'redirect' => $this->setupStepUrl('connection', $relink, $craftSiteId),
+            ];
+        }
+
+        $runtimeState = $plugin->getState()->getState();
+        $runtimeState['connectionBaseUrl'] = $baseUrlRaw;
+        $runtimeState['connectionApiKey'] = $apiKeyRaw;
+        if (!$plugin->getState()->saveState($runtimeState)) {
+            $session->setError(Craft::t('burrow', 'Could not save connection settings.'));
+
+            return [
+                'ok' => false,
+                'redirect' => $this->setupStepUrl('connection', $relink, $craftSiteId),
+            ];
+        }
+
+        $general = Craft::$app->getConfig()->getGeneral();
+        if ($general->allowAdminChanges) {
+            $settings = $plugin->getSettings();
+            $settings->baseUrl = $baseUrlRaw;
+            $settings->apiKey = $apiKeyRaw;
+            if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
+                $errors = $settings->getFirstErrors();
+                $message = Craft::t('burrow', 'Could not sync connection to project config.');
+                if (!empty($errors)) {
+                    $message .= ' ' . implode(' ', array_values($errors));
+                }
+                Craft::error('Burrow project config sync failed: ' . json_encode($errors), __METHOD__);
+                $session->setError($message);
+
+                return [
+                    'ok' => false,
+                    'redirect' => $this->setupStepUrl('connection', $relink, $craftSiteId),
+                ];
+            }
+        }
+
+        $craftSites = $plugin->getState()->listCraftSites();
+        $isMultiSite = count($craftSites) > 1;
+        $discoverSiteUrl = null;
+        if ($craftSiteId > 0) {
+            $siteState = $plugin->getState()->getSiteState($craftSiteId);
+            $discoverSiteUrl = trim((string)($siteState['siteUrl'] ?? '')) ?: null;
+        } elseif (!$isMultiSite && isset($craftSites[0])) {
+            $discoverSiteUrl = (string)($craftSites[0]['baseUrl'] ?? '');
+            $craftSiteId = (int)($craftSites[0]['id'] ?? 0);
+            $plugin->getState()->saveSiteState($craftSiteId, [
+                'enabled' => true,
+                'siteUrl' => $discoverSiteUrl,
+            ], [
+                'connectionBaseUrl' => $baseUrlRaw,
+                'connectionApiKey' => $apiKeyRaw,
+            ]);
+        }
+
+        $discover = $plugin->getBurrowApi()->discover(
+            $baseUrl,
+            $apiKey,
+            (array)($runtimeState['capabilities'] ?? []),
+            $discoverSiteUrl
+        );
+        if (!$discover['ok']) {
+            $plugin->getLogs()->log('error', 'Connection discover failed', 'onboarding', 'system', null, [
+                'error' => $discover['error'],
+                'auto' => $isAuto,
+            ]);
+            if ($isAuto) {
+                $session->set('burrow.autoDiscoverFailed', true);
+            }
+            $session->setError(Craft::t('burrow', 'Connection failed: {error}', ['error' => $discover['error']]));
+
+            return [
+                'ok' => false,
+                'redirect' => $this->setupStepUrl('connection', $relink, $craftSiteId),
+            ];
+        }
+
+        $session->remove('burrow.autoDiscoverFailed');
+        $session->set('burrow.discoveredProjects', $discover['projects']);
+        if ($craftSiteId > 0) {
+            $session->set('burrow.discoveredProjects.' . $craftSiteId, $discover['projects']);
+        }
+
+        $plugin->getLogs()->log('info', 'Connection established and projects discovered', 'onboarding', 'system', null, [
+            'projectsCount' => count($discover['projects']),
+            'siteId' => $craftSiteId,
+            'auto' => $isAuto,
+        ]);
+
+        if (!$isAuto) {
+            $session->setNotice(Craft::t('burrow', 'Connection established.'));
+        } else {
+            $session->setNotice(Craft::t('burrow', 'Connected using environment credentials. Choose a Burrow project to continue.'));
+        }
+
+        return [
+            'ok' => true,
+            'redirect' => $this->advancePastConnectionStep($relink, $craftSiteId),
+        ];
+    }
+
+    /**
+     * Advances onboarding past Connection to Sites (multi-site) or Project.
+     */
+    private function advancePastConnectionStep(bool $relink, int $craftSiteId): string
+    {
+        $plugin = Plugin::getInstance();
+        if (!$relink) {
+            $craftSites = $plugin->getState()->listCraftSites();
+            $isMultiSite = count($craftSites) > 1;
+            $runtimeState = $plugin->getState()->getState();
+            if ($isMultiSite) {
+                $runtimeState['onboardingStep'] = 'sites';
+                $plugin->getState()->saveState($runtimeState);
+                $plugin->getLogs()->log('info', 'Connection established; choose sites to link', 'onboarding', 'system', null, []);
+
+                return $this->setupStepUrl('sites', false);
+            }
+
+            $runtimeState['onboardingStep'] = 'project';
+            $plugin->getState()->saveState($runtimeState);
+        }
+
+        return $this->setupStepUrl('project', $relink, $craftSiteId);
     }
 
     /**
@@ -821,97 +1042,20 @@ class SettingsController extends Controller
         $relink = $this->isRelinkRequest() || $plugin->isOnboardingCompleted();
         $craftSiteId = (int)$request->getBodyParam('craftSiteId', 0);
 
-        if ($baseUrl === '' || $apiKey === '') {
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Base URL and API key are required. Enter a value or an environment variable such as $BURROW_API_KEY.'));
-            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
-        }
+        // Manual retry clears a prior auto-discover failure so Connect can run again.
+        Craft::$app->getSession()->remove('burrow.autoDiscoverFailed');
 
-        $runtimeState = $plugin->getState()->getState();
-        $runtimeState['connectionBaseUrl'] = $baseUrlRaw;
-        $runtimeState['connectionApiKey'] = $apiKeyRaw;
-        if (!$plugin->getState()->saveState($runtimeState)) {
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Could not save connection settings.'));
-            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
-        }
-
-        $general = Craft::$app->getConfig()->getGeneral();
-        if ($general->allowAdminChanges) {
-            $settings = $plugin->getSettings();
-            $settings->baseUrl = $baseUrlRaw;
-            $settings->apiKey = $apiKeyRaw;
-            if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
-                $errors = $settings->getFirstErrors();
-                $message = Craft::t('burrow', 'Could not sync connection to project config.');
-                if (!empty($errors)) {
-                    $message .= ' ' . implode(' ', array_values($errors));
-                }
-                Craft::error('Burrow project config sync failed: ' . json_encode($errors), __METHOD__);
-                Craft::$app->getSession()->setError($message);
-                return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
-            }
-        }
-
-        $craftSites = $plugin->getState()->listCraftSites();
-        $isMultiSite = count($craftSites) > 1;
-        $discoverSiteUrl = null;
-        if ($craftSiteId > 0) {
-            $siteState = $plugin->getState()->getSiteState($craftSiteId);
-            $discoverSiteUrl = trim((string)($siteState['siteUrl'] ?? '')) ?: null;
-        } elseif (!$isMultiSite && isset($craftSites[0])) {
-            $discoverSiteUrl = (string)($craftSites[0]['baseUrl'] ?? '');
-            $craftSiteId = (int)($craftSites[0]['id'] ?? 0);
-            $plugin->getState()->saveSiteState($craftSiteId, [
-                'enabled' => true,
-                'siteUrl' => $discoverSiteUrl,
-            ], [
-                'connectionBaseUrl' => $baseUrlRaw,
-                'connectionApiKey' => $apiKeyRaw,
-            ]);
-        }
-
-        $discover = $plugin->getBurrowApi()->discover(
+        $result = $this->establishConnectionFromResolvedCredentials(
+            $baseUrlRaw,
+            $apiKeyRaw,
             $baseUrl,
             $apiKey,
-            (array)($runtimeState['capabilities'] ?? []),
-            $discoverSiteUrl
+            $relink,
+            $craftSiteId,
+            false
         );
-        if (!$discover['ok']) {
-            $plugin->getLogs()->log('error', 'Connection discover failed', 'onboarding', 'system', null, ['error' => $discover['error']]);
-            Craft::$app->getSession()->setError(Craft::t('burrow', 'Connection failed: {error}', ['error' => $discover['error']]));
-            return $this->redirect($this->setupStepUrl('connection', $relink, $craftSiteId));
-        }
 
-        Craft::$app->getSession()->set('burrow.discoveredProjects', $discover['projects']);
-        if ($craftSiteId > 0) {
-            Craft::$app->getSession()->set('burrow.discoveredProjects.' . $craftSiteId, $discover['projects']);
-        }
-
-        if (!$relink) {
-            if ($isMultiSite) {
-                $runtimeState = $plugin->getState()->getState();
-                $runtimeState['onboardingStep'] = 'sites';
-                $plugin->getState()->saveState($runtimeState);
-                $plugin->getLogs()->log('info', 'Connection established; choose sites to link', 'onboarding', 'system', null, [
-                    'projectsCount' => count($discover['projects']),
-                ]);
-                Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Connection established.'));
-
-                return $this->redirect($this->setupStepUrl('sites', false));
-            }
-
-            $runtimeState = $plugin->getState()->getState();
-            $runtimeState['onboardingStep'] = 'project';
-            $plugin->getState()->saveState($runtimeState);
-        }
-
-        $plugin->getLogs()->log('info', 'Connection established and projects discovered', 'onboarding', 'system', null, [
-            'projectsCount' => count($discover['projects']),
-            'siteId' => $craftSiteId,
-        ]);
-
-        Craft::$app->getSession()->setNotice(Craft::t('burrow', 'Connection established.'));
-
-        return $this->redirect($this->setupStepUrl('project', $relink, $craftSiteId));
+        return $this->redirect($result['redirect']);
     }
 
     public function actionSaveSites(): ?Response

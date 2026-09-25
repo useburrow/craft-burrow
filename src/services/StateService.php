@@ -19,6 +19,15 @@ use burrow\Burrow\records\RuntimeStateRecord;
  */
 class StateService extends Component
 {
+    /**
+     * Request-local copy of runtime state. Avoids repeated `SELECT *` reads when
+     * several callers need the same row during one request.
+     *
+     * @var array<string,mixed>|null
+     * @since 5.5.5
+     */
+    private ?array $_state = null;
+
     // =========================================================================
     // Public Methods
     // =========================================================================
@@ -36,9 +45,15 @@ class StateService extends Component
      */
     public function getState(): array
     {
+        if ($this->_state !== null) {
+            return $this->_state;
+        }
+
         $record = RuntimeStateRecord::find()->one();
         if (!$record) {
-            return $this->defaultState();
+            $this->_state = $this->defaultState();
+
+            return $this->_state;
         }
 
         $install = $this->_readInstallFields($record);
@@ -49,9 +64,11 @@ class StateService extends Component
 
         $flattened = $this->_flattenPrimarySiteView($install, $siteStates);
 
-        return array_merge($this->defaultState(), $flattened, [
+        $this->_state = array_merge($this->defaultState(), $flattened, [
             'siteStates' => $siteStates,
         ]);
+
+        return $this->_state;
     }
 
     /**
@@ -177,7 +194,11 @@ class StateService extends Component
         $record->connectionApiKey = CredentialCrypto::seal(trim((string)($state['connectionApiKey'] ?? '')), CredentialCrypto::INFO_CONNECTION_API_KEY);
         $record->siteStates = $this->_encodeSiteStatesForStorage($siteStates);
 
-        return (bool)$record->save();
+        $saved = (bool)$record->save();
+        $this->_state = null;
+        Craft::$app->getCache()->delete('burrow:inject-collector');
+
+        return $saved;
     }
 
     /**

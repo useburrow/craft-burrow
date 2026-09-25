@@ -22,6 +22,12 @@ class QueueService extends Component
     private array $deferredOutboxElementIds = [];
 
     /**
+     * @var bool|null
+     * @since 5.5.5
+     */
+    private ?bool $_outboxElementTableExists = null;
+
+    /**
      * Skip updating the Craft search index on each outbox element save; pair with
      * {@see flushDeferredOutboxElementSearchIndex()} after bulk work (e.g. backfill jobs).
      */
@@ -850,7 +856,13 @@ class QueueService extends Component
 
     private function outboxElementTableExists(): bool
     {
-        return Craft::$app->getDb()->getSchema()->getTableSchema('{{%burrow_outbox_elements}}', true) !== null;
+        if ($this->_outboxElementTableExists !== null) {
+            return $this->_outboxElementTableExists;
+        }
+
+        $this->_outboxElementTableExists = Craft::$app->getDb()->tableExists('{{%burrow_outbox_elements}}');
+
+        return $this->_outboxElementTableExists;
     }
 
     /**

@@ -31,6 +31,13 @@ class Plugin extends CraftPlugin
     public bool $hasCpSettings = true;
     public bool $hasCpSection = true;
 
+    /**
+     * Shared gate so system-job scheduling runs at most once a minute.
+     *
+     * @since 5.5.5
+     */
+    private const SYSTEM_JOBS_CHECK_CACHE_KEY = 'burrow:system-jobs-check';
+
     public function init(): void
     {
         parent::init();
@@ -668,8 +675,15 @@ class Plugin extends CraftPlugin
 
     private function _scheduleSystemJobs(): void
     {
-        $db = Craft::$app->getDb();
-        if ($db->getSchema()->getTableSchema('{{%burrow_runtime_state}}', true) === null) {
+        // Once a minute is enough for hourly/weekly jobs. Skipping here avoids a
+        // schema lookup and a runtime-state read on every front-end request.
+        if (!Craft::$app->getCache()->add(self::SYSTEM_JOBS_CHECK_CACHE_KEY, 1, 60)) {
+            return;
+        }
+
+        if (!Craft::$app->getDb()->tableExists('{{%burrow_runtime_state}}')) {
+            Craft::$app->getCache()->delete(self::SYSTEM_JOBS_CHECK_CACHE_KEY);
+
             return;
         }
 

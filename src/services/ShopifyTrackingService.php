@@ -153,16 +153,23 @@ class ShopifyTrackingService extends Component
      */
     public function shouldInjectCollector(?array $runtimeState = null): bool
     {
-        $plugin = Plugin::getInstance();
-        $runtimeState ??= $plugin->getState()->getState();
-        if (empty($runtimeState['onboardingCompleted'])) {
-            return false;
-        }
-        if (!$this->isShopifyFunnelEnabled($runtimeState)) {
-            return false;
+        $cacheKey = 'burrow:inject-collector';
+        if ($runtimeState === null) {
+            $cached = Craft::$app->getCache()->get($cacheKey);
+            if (is_bool($cached)) {
+                return $cached;
+            }
         }
 
-        return $plugin->canDispatchToBurrow($runtimeState);
+        $plugin = Plugin::getInstance();
+        $runtimeState ??= $plugin->getState()->getState();
+        $shouldInject = !empty($runtimeState['onboardingCompleted'])
+            && $this->isShopifyFunnelEnabled($runtimeState)
+            && $plugin->canDispatchToBurrow($runtimeState);
+
+        Craft::$app->getCache()->set($cacheKey, $shouldInject, 60);
+
+        return $shouldInject;
     }
 
     /**

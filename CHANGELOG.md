@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.5] - 2026-09-25
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Fixed
+
+- **Runtime-table query load:** plugin startup no longer forces a schema reload of `burrow_runtime_state` on every request (`SHOW FULL COLUMNS` / `SHOW CREATE TABLE`). System-job scheduling runs at most once a minute, runtime state is read once per request, and the Shopify collector gate is cached for 60 seconds. Saving state clears that cache.
+
 ## [5.5.4] - 2026-09-02
 
 No database schema changes; `schemaVersion` remains `5.4.0`.

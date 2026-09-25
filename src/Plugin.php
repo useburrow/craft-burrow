@@ -675,8 +675,12 @@ class Plugin extends CraftPlugin
 
     private function _scheduleSystemJobs(): void
     {
-        // Once a minute is enough for hourly/weekly jobs. Skipping here avoids a
-        // schema lookup and a runtime-state read on every front-end request.
+        $request = Craft::$app->getRequest();
+        if (!$request->getIsConsoleRequest() && $request->getIsSiteRequest()) {
+            return;
+        }
+
+        // Once a minute is enough for hourly/weekly jobs. Front-end requests never reach this.
         if (!Craft::$app->getCache()->add(self::SYSTEM_JOBS_CHECK_CACHE_KEY, 1, 60)) {
             return;
         }
@@ -742,6 +746,18 @@ class Plugin extends CraftPlugin
                     Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\DetectAbandonedCartsJob());
                     $systemJobs['cartAbandonmentQueuedAt'] = gmdate('c');
                 }
+            }
+
+            // Daily outbox and event-log retention. Previously this only ran when operations settings were saved.
+            $operations = is_array($integrationSettings['operations'] ?? null) ? $integrationSettings['operations'] : [];
+            $retentionDays = max(1, min(365, (int)($operations['outboxRetentionDays'] ?? 30)));
+            $cleanupInterval = 86400;
+            $cleanupQueued = $this->_timestampFromState((string)($systemJobs['outboxCleanupQueuedAt'] ?? ''));
+            if ($cleanupQueued === 0 || ($now - $cleanupQueued) >= $cleanupInterval) {
+                Craft::$app->getQueue()->push(new \burrow\Burrow\jobs\CleanupOutboxRetentionJob([
+                    'retentionDays' => $retentionDays,
+                ]));
+                $systemJobs['outboxCleanupQueuedAt'] = gmdate('c');
             }
 
             $integrationSettings['systemJobs'] = $systemJobs;

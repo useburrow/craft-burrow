@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [5.5.6] - 2026-09-25
+
+No database schema changes; `schemaVersion` remains `5.4.0`.
+
+### Fixed
+
+- **Cart-save query load:** checkout detection checks the funnel flag before loading line items, and remembers orders that already emitted checkout-started so later saves skip the sent-index lookup.
+- **Live event writes:** new outbox rows no longer save a Control Panel element inside the shopper request. One index job reconciles them afterward. Successful Commerce publishes no longer insert an info row into `burrow_event_logs`.
+- **Cart recovery lookup:** the original cart total is read from that customer's abandonment row (`event_key`), not the latest sent abandonment payload in the whole outbox.
+- **Front-end scheduler:** system jobs are no longer considered on site requests. Outbox and event-log retention runs daily from the queue. Dashboard outbox counts are one grouped query.
+
 ## [5.5.5] - 2026-09-25
 
 No database schema changes; `schemaVersion` remains `5.4.0`.

@@ -3,6 +3,7 @@ namespace burrow\Burrow\services;
 
 use burrow\Burrow\elements\OutboxElement;
 use burrow\Burrow\jobs\DeliverOutboxRowJob;
+use burrow\Burrow\jobs\SyncOutboxElementIndexJob;
 use burrow\Burrow\Plugin;
 use Craft;
 use craft\base\Component;
@@ -26,6 +27,14 @@ class QueueService extends Component
      * @since 5.5.5
      */
     private ?bool $_outboxElementTableExists = null;
+
+    /**
+     * One deferred CP-index job per request, instead of a job per outbox insert.
+     *
+     * @var bool
+     * @since 5.5.6
+     */
+    private bool $_elementIndexJobQueued = false;
 
     /**
      * Skip updating the Craft search index on each outbox element save; pair with
@@ -86,7 +95,7 @@ class QueueService extends Component
                 'created_at' => gmdate('Y-m-d H:i:s'),
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ])->execute();
-            $this->syncElementIndexRecordByOutboxId($id);
+            $this->_queueElementIndexSync();
             return true;
         } catch (\Throwable) {
             return false;
@@ -98,14 +107,32 @@ class QueueService extends Component
      */
     public function stats(): array
     {
-        $db = Craft::$app->getDb();
-
-        return [
-            'pending' => (int)$db->createCommand("SELECT COUNT(*) FROM {{%burrow_outbox}} WHERE status = 'pending'")->queryScalar(),
-            'retrying' => (int)$db->createCommand("SELECT COUNT(*) FROM {{%burrow_outbox}} WHERE status = 'retrying'")->queryScalar(),
-            'sent' => (int)$db->createCommand("SELECT COUNT(*) FROM {{%burrow_outbox}} WHERE status = 'sent'")->queryScalar(),
-            'failed' => (int)$db->createCommand("SELECT COUNT(*) FROM {{%burrow_outbox}} WHERE status = 'failed'")->queryScalar(),
+        $counts = [
+            'pending' => 0,
+            'retrying' => 0,
+            'sent' => 0,
+            'failed' => 0,
         ];
+
+        $rows = Craft::$app->getDb()->createCommand(
+            'SELECT status, COUNT(*) AS total FROM {{%burrow_outbox}} GROUP BY status'
+        )->queryAll();
+        if (!is_array($rows)) {
+            return $counts;
+        }
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $status = (string)($row['status'] ?? '');
+            if (!array_key_exists($status, $counts)) {
+                continue;
+            }
+            $counts[$status] = (int)($row['total'] ?? 0);
+        }
+
+        return $counts;
     }
 
     /**
@@ -466,7 +493,6 @@ class QueueService extends Component
         if (!$ok) {
             return false;
         }
-        $this->syncElementIndexRecordByEventKey($eventKey);
 
         try {
             Craft::$app->getDb()->createCommand()->upsert(
@@ -500,9 +526,6 @@ class QueueService extends Component
             null,
             $scheduleAutoRetry
         );
-        if ($ok) {
-            $this->syncElementIndexRecordByEventKey($eventKey);
-        }
         return $ok;
     }
 
@@ -546,6 +569,15 @@ class QueueService extends Component
             // Best-effort cleanup for sent-index table.
         }
         $this->cleanupElementIndexOrphans();
+        try {
+            Craft::$app->getDb()->createCommand()->delete(
+                '{{%burrow_event_logs}}',
+                ['<', 'dateCreated', $cutoff]
+            )->execute();
+        } catch (\Throwable) {
+            // Best-effort; event log table may be missing in partial installs.
+        }
+
         return $deletedOutbox;
     }
 
@@ -627,7 +659,7 @@ class QueueService extends Component
                     'updated_at' => $now,
                 ])->execute();
                 $transaction->commit();
-                $this->syncElementIndexRecordByOutboxId($id);
+                $this->_queueElementIndexSync();
                 if ($status !== 'sent' && $newStatus === 'retrying') {
                     $this->pushDelayedOutboxDelivery($id, $attemptCount, $scheduleAutoRetry);
                 }
@@ -718,24 +750,23 @@ class QueueService extends Component
         QueueHelper::push(new DeliverOutboxRowJob(['outboxId' => $outboxId]), null, $delay, 120);
     }
 
-    private function syncElementIndexRecordByEventKey(string $eventKey): void
+    /**
+     * Queues one CP element-index job for outbox rows inserted during this request.
+     *
+     * @since 5.5.6
+     */
+    private function _queueElementIndexSync(): void
     {
-        $eventKey = trim($eventKey);
-        if ($eventKey === '') {
+        if ($this->_elementIndexJobQueued || !$this->outboxElementTableExists()) {
             return;
         }
-        $row = Craft::$app->getDb()->createCommand(
-            'SELECT id FROM {{%burrow_outbox}} WHERE event_key = :eventKey LIMIT 1',
-            [':eventKey' => $eventKey]
-        )->queryOne();
-        if (!is_array($row)) {
-            return;
+
+        $this->_elementIndexJobQueued = true;
+        try {
+            QueueHelper::push(new SyncOutboxElementIndexJob(), null, 0, SyncOutboxElementIndexJob::TTR);
+        } catch (\Throwable) {
+            $this->_elementIndexJobQueued = false;
         }
-        $id = trim((string)($row['id'] ?? ''));
-        if ($id === '') {
-            return;
-        }
-        $this->syncElementIndexRecordByOutboxId($id);
     }
 
     private function syncElementIndexRecordByOutboxId(string $outboxId): void

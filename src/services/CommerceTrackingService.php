@@ -11,6 +11,14 @@ class CommerceTrackingService extends Component
     private array $ordersWithRemovalInFlight = [];
 
     /**
+     * Order IDs whose checkout-started event is already recorded, so later cart saves skip the sent-index lookup.
+     *
+     * @var array<string,true>
+     * @since 5.5.6
+     */
+    private array $checkoutStartedOrderIds = [];
+
+    /**
      * Resolves site-scoped runtime state for an order (or the current request site).
      *
      * @param object|null $order
@@ -283,22 +291,24 @@ class CommerceTrackingService extends Component
             $this->emitCartRecoveryIfApplicable($plugin, $runtimeState, $order, $orderId, $orderTotal, $currency, $customerToken, $submittedAt);
         }
 
-        $plugin->getLogs()->log(
-            $failed === 0 ? 'info' : 'warning',
-            $failed === 0 ? 'Commerce order events published' : 'Commerce order events publish failed',
-            'commerce',
-            'ecommerce',
-            null,
-            [
-                'orderId' => $orderId,
-                'orderReference' => $orderReference,
-                'orderLookupNumber' => $orderLookupNumber,
-                'shippingMethod' => $shippingMethod,
-                'requested' => count($events),
-                'published' => $published,
-                'failed' => $failed,
-            ]
-        );
+        if ($failed > 0) {
+            $plugin->getLogs()->log(
+                'warning',
+                'Commerce order events publish failed',
+                'commerce',
+                'ecommerce',
+                null,
+                [
+                    'orderId' => $orderId,
+                    'orderReference' => $orderReference,
+                    'orderLookupNumber' => $orderLookupNumber,
+                    'shippingMethod' => $shippingMethod,
+                    'requested' => count($events),
+                    'published' => $published,
+                    'failed' => $failed,
+                ]
+            );
+        }
     }
 
     /**
@@ -388,14 +398,16 @@ class CommerceTrackingService extends Component
             'orderId' => $orderId,
         ]);
 
-        $plugin->getLogs()->log(
-            $ok ? 'info' : 'warning',
-            $ok ? 'Commerce order ' . $lifecycleState . ' event published' : 'Commerce order ' . $lifecycleState . ' event failed',
-            'commerce',
-            'ecommerce',
-            null,
-            ['orderId' => $orderId, 'lifecycleState' => $lifecycleState, 'statusHandle' => $newHandle]
-        );
+        if (!$ok) {
+            $plugin->getLogs()->log(
+                'warning',
+                'Commerce order ' . $lifecycleState . ' event failed',
+                'commerce',
+                'ecommerce',
+                null,
+                ['orderId' => $orderId, 'lifecycleState' => $lifecycleState, 'statusHandle' => $newHandle]
+            );
+        }
     }
 
     /**
@@ -545,8 +557,19 @@ class CommerceTrackingService extends Component
             return;
         }
 
+        $plugin = \burrow\Burrow\Plugin::getInstance();
+        $runtimeState = $this->resolveRuntimeStateForOrder($order);
+        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
+            return;
+        }
+
         $email = $this->stringValue($order, ['email']);
         if ($email === '') {
+            return;
+        }
+
+        $orderId = $this->extractOrderIdentifier($order);
+        if ($orderId === '' || $this->_checkoutAlreadyStarted($orderId)) {
             return;
         }
 
@@ -558,21 +581,7 @@ class CommerceTrackingService extends Component
             return;
         }
 
-        $plugin = \burrow\Burrow\Plugin::getInstance();
-        $runtimeState = $this->resolveRuntimeStateForOrder($order);
-        if (empty($runtimeState['enabled']) || !$this->isCommerceFunnelEnabled($runtimeState)) {
-            return;
-        }
-
-        $orderId = $this->extractOrderIdentifier($order);
-        if ($orderId === '') {
-            return;
-        }
-
         $checkoutKey = 'checkout_started_' . $orderId;
-        if ($plugin->getQueue()->wasSent($checkoutKey)) {
-            return;
-        }
 
         $currency = $this->stringValue($order, ['paymentCurrency', 'currency']);
         if ($currency === '') {
@@ -623,6 +632,8 @@ class CommerceTrackingService extends Component
 
         if ($result['ok']) {
             $plugin->getQueue()->markSent($checkoutKey, $eventEnvelope, $channel, $eventName);
+            $this->checkoutStartedOrderIds[$orderId] = true;
+            Craft::$app->getCache()->set('burrow:checkout-started:' . $orderId, true, 86400);
         } else {
             $error = trim((string)($result['error'] ?? 'Checkout started publish failed.'));
             $plugin->getQueue()->markFailed($checkoutKey, $eventEnvelope, $error, $channel, $eventName);
@@ -681,6 +692,34 @@ class CommerceTrackingService extends Component
     }
 
     /**
+     * Whether this order already emitted checkout-started, without hitting the sent index on later saves.
+     *
+     * @since 5.5.6
+     */
+    private function _checkoutAlreadyStarted(string $orderId): bool
+    {
+        if (isset($this->checkoutStartedOrderIds[$orderId])) {
+            return true;
+        }
+
+        $cacheKey = 'burrow:checkout-started:' . $orderId;
+        if (Craft::$app->getCache()->get($cacheKey) === true) {
+            $this->checkoutStartedOrderIds[$orderId] = true;
+
+            return true;
+        }
+
+        if (!\burrow\Burrow\Plugin::getInstance()->getQueue()->wasSent('checkout_started_' . $orderId)) {
+            return false;
+        }
+
+        $this->checkoutStartedOrderIds[$orderId] = true;
+        Craft::$app->getCache()->set($cacheKey, true, 86400);
+
+        return true;
+    }
+
+    /**
      * Looks up the abandonment signal and enriches with timing and original cart total.
      *
      * @return array{originalCartTotal:float,minutesSinceAbandonment:int}|null
@@ -715,11 +754,8 @@ class CommerceTrackingService extends Component
         $originalCartTotal = 0.0;
         try {
             $outboxRow = \Craft::$app->getDb()->createCommand(
-                "SELECT payload FROM {{%burrow_outbox}}
-                 WHERE event_name IN ('ecommerce.cart.abandoned', 'ecommerce.checkout.abandoned')
-                 AND status = 'sent'
-                 ORDER BY updated_at DESC
-                 LIMIT 1"
+                'SELECT payload FROM {{%burrow_outbox}} WHERE event_key = :key LIMIT 1',
+                [':key' => 'abandonment_' . $customerToken]
             )->queryOne();
             if (is_array($outboxRow) && !empty($outboxRow['payload'])) {
                 $payload = $outboxRow['payload'];
